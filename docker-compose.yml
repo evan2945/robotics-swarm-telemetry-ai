@@ -1,0 +1,9 @@
+version: '3.8'
+
+services:
+  swarm-redis:
+    image: redis:alpine
+    container_name: swarm-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
