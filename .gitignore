@@ -1,0 +1,17 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+
+# Go compiled binaries & testing
+swarm-engine/swarm-engine
+*.exe
+*.test
+*.prof
+
+# OS & IDE junk
+.DS_Store
+.vscode/
+.idea/
