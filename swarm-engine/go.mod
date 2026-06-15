@@ -1,3 +1,3 @@
-module robotic-swarm-telemetry-ai/swarm-engine
+module swarm-engine
 
 go 1.26.1
