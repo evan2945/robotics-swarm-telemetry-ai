@@ -2,8 +2,8 @@
 __pycache__/
 *.py[cod]
 *$py.class
-.venv/
-env/
+simulation-ui/venv/
+simulation-ui/env/
 
 # Go compiled binaries & testing
 swarm-engine/swarm-engine
