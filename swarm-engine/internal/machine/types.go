@@ -37,3 +37,17 @@ type MachineBlueprint struct {
 
 // CauldronRegistry maps machine names to their static blueprints.
 type CauldronRegistry map[string]MachineBlueprint
+
+type MachineState struct {
+	ID           string           `json:"id"`
+	Name         string           `json:"name"`
+	State        string           `json:"state"`
+	X            float64          `json:"x"`
+	Y            float64          `json:"y"`
+	TargetX      float64          `json:"target_x"`
+	TargetY      float64          `json:"target_y"`
+	Vx           float64          `json:"v_x"`
+	Vy           float64          `json:"v_y"`
+	BatteryLevel float64          `json:"battery_level"`
+	Blueprint    MachineBlueprint `json:"blueprint"`
+}
