@@ -45,8 +45,17 @@ type MachineBlueprint struct {
 // CauldronRegistry maps machine names to their static blueprints.
 type CauldronRegistry map[string]MachineBlueprint
 
+type GossipPacket struct {
+	ID       string
+	OriginId string
+	Payload  string
+	TTL      int
+}
+
 type MachineState struct {
 	mu             sync.Mutex
+	Inbox          chan GossipPacket
+	Outbox         chan GossipPacket
 	ID             string           `json:"id"`
 	Name           string           `json:"name"`
 	State          string           `json:"state"`
@@ -59,6 +68,7 @@ type MachineState struct {
 	BatteryLevel   float64          `json:"battery_level"`
 	Blueprint      MachineBlueprint `json:"blueprint"`
 	TickerInterval time.Duration    `json:"ticker_interval"`
+	SeenPackets    map[string]bool  `json:"seen_packets"`
 }
 
 func (m *MachineState) RunLifecycle(ctx context.Context) {
@@ -74,6 +84,18 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 			blueprint := m.GetBlueprint()
 			m.SetBatteryLevel(battery_level - blueprint.Battery.DrainRate)
 			fmt.Printf("Machine %s battery: %f\n", m.GetName(), m.GetBatteryLevel())
+
+		case packet := <-m.Inbox:
+			fmt.Printf("[%s] Received Gossip Packet: %s from %s\n", m.GetName(), packet.ID, packet.OriginId)
+
+			if !m.HasSeenPacket(packet.ID) {
+				m.AddSeenPacket(packet.ID)
+				packet.TTL -= 1
+
+				if packet.TTL > 0 {
+					m.QueuePacketToSend(packet)
+				}
+			}
 		}
 	}
 }
@@ -177,4 +199,32 @@ func (m *MachineState) GetTickerInterval() time.Duration {
 	defer m.mu.Unlock()
 
 	return m.TickerInterval
+}
+
+func (m *MachineState) HasSeenPacket(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.SeenPackets[id]
+}
+
+func (m *MachineState) AddSeenPacket(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.SeenPackets[id] = true
+}
+
+func (m *MachineState) GetSeenPackets() map[string]bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.SeenPackets
+}
+
+func (m *MachineState) QueuePacketToSend(packet GossipPacket) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.Outbox <- packet
 }

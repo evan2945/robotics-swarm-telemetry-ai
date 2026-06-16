@@ -124,6 +124,9 @@ func TestEngineTick(t *testing.T) {
 						Speed: 10,
 					},
 				},
+				Inbox:       make(chan machine.GossipPacket, 10),
+				Outbox:      make(chan machine.GossipPacket, 10),
+				SeenPackets: make(map[string]bool),
 			}
 
 			engine := NewEngine([]*machine.MachineState{mockMachine})
