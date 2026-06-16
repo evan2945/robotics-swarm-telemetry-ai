@@ -23,28 +23,37 @@ func NewEngine(machines []*machine.MachineState) *Engine {
 
 func (e *Engine) Tick(dt float64) {
 	for _, m := range e.Machines {
-		m.Vx, m.Vy = machine.CalculateHeading(m.X, m.Y, m.TargetX, m.TargetY, m.Blueprint.Locomotion.Speed)
-		m.X = m.X + (m.Vx * dt)
-		m.Y = m.Y + (m.Vy * dt)
+		mVx, mVy := m.GetHeading()
+		mX, mY := m.GetPosition()
+		mTargetX, mTargetY := m.GetTarget()
+		mBlueprint := m.GetBlueprint()
 
-		if m.X <= 0 {
-			m.X = 0
-			m.Vx = -m.Vx
-			m.TargetX = -m.TargetX
-		} else if m.X >= e.Width {
-			m.X = e.Width
-			m.Vx = -m.Vx
-			m.TargetX = e.Width - (m.TargetX - e.Width)
+		mVx, mVy = machine.CalculateHeading(mX, mY, mTargetX, mTargetY, mBlueprint.Locomotion.Speed)
+		mX = mX + (mVx * dt)
+		mY = mY + (mVy * dt)
+
+		if mX <= 0 {
+			mX = 0
+			mVx = -mVx
+			mTargetX = -mTargetX
+		} else if mX >= e.Width {
+			mX = e.Width
+			mVx = -mVx
+			mTargetX = e.Width - (mTargetX - e.Width)
 		}
 
-		if m.Y <= 0 {
-			m.Y = 0
-			m.Vy = -m.Vy
-			m.TargetY = -m.TargetY
-		} else if m.Y >= e.Height {
-			m.Y = e.Height
-			m.Vy = -m.Vy
-			m.TargetY = e.Height - (m.TargetY - e.Height)
+		if mY <= 0 {
+			mY = 0
+			mVy = -mVy
+			mTargetY = -mTargetY
+		} else if mY >= e.Height {
+			mY = e.Height
+			mVy = -mVy
+			mTargetY = e.Height - (mTargetY - e.Height)
 		}
+
+		m.SetPosition(mX, mY)
+		m.SetHeading(mVx, mVy)
+		m.SetTarget(mTargetX, mTargetY)
 	}
 }

@@ -3,6 +3,7 @@ package simulation
 import (
 	"swarm-engine/internal/machine"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -108,15 +109,16 @@ func TestEngineTick(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
-			mock_machine := &machine.MachineState{
-				ID:           "machine-01",
-				Name:         "mock machine",
-				State:        "PATROL",
-				X:            tc.startX,
-				Y:            tc.startY,
-				TargetX:      tc.targetX,
-				TargetY:      tc.targetY,
-				BatteryLevel: 100,
+			mockMachine := &machine.MachineState{
+				ID:             "machine-01",
+				Name:           "mock machine",
+				State:          "PATROL",
+				X:              tc.startX,
+				Y:              tc.startY,
+				TargetX:        tc.targetX,
+				TargetY:        tc.targetY,
+				BatteryLevel:   100,
+				TickerInterval: time.Second,
 				Blueprint: machine.MachineBlueprint{
 					Locomotion: machine.LocomotionBlueprint{
 						Speed: 10,
@@ -124,15 +126,15 @@ func TestEngineTick(t *testing.T) {
 				},
 			}
 
-			engine := NewEngine([]*machine.MachineState{mock_machine})
+			engine := NewEngine([]*machine.MachineState{mockMachine})
 			engine.Tick(tc.dt)
 
-			assert.Equal(t, tc.expectedX, mock_machine.X)
-			assert.Equal(t, tc.expectedY, mock_machine.Y)
-			assert.Equal(t, tc.expectedVx, mock_machine.Vx)
-			assert.Equal(t, tc.expectedVy, mock_machine.Vy)
-			assert.Equal(t, tc.expectedTargetX, mock_machine.TargetX)
-			assert.Equal(t, tc.expectedTargetY, mock_machine.TargetY)
+			assert.Equal(t, tc.expectedX, mockMachine.X)
+			assert.Equal(t, tc.expectedY, mockMachine.Y)
+			assert.Equal(t, tc.expectedVx, mockMachine.Vx)
+			assert.Equal(t, tc.expectedVy, mockMachine.Vy)
+			assert.Equal(t, tc.expectedTargetX, mockMachine.TargetX)
+			assert.Equal(t, tc.expectedTargetY, mockMachine.TargetY)
 		})
 	}
 }
