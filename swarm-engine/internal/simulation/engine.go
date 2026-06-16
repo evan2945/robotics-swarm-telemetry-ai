@@ -1,6 +1,7 @@
 package simulation
 
 import (
+	"math"
 	"swarm-engine/internal/machine"
 	"time"
 )
@@ -55,5 +56,39 @@ func (e *Engine) Tick(dt float64) {
 		m.SetPosition(mX, mY)
 		m.SetHeading(mVx, mVy)
 		m.SetTarget(mTargetX, mTargetY)
+
+	DrainingOutbox:
+		for {
+			select {
+			case packet := <-m.Outbox:
+				e.broadcastPacket(m, packet)
+			default:
+				break DrainingOutbox
+			}
+		}
+	}
+}
+
+func (e *Engine) broadcastPacket(sender *machine.MachineState, packet machine.GossipPacket) {
+	senderX, senderY := sender.GetPosition()
+	senderRange := sender.GetBlueprint().Communication.Range
+
+	for _, receiver := range e.Machines {
+		if receiver.GetId() == sender.GetId() {
+			continue
+		}
+
+		if receiver.HasSeenPacket(packet.ID) {
+			continue
+		}
+
+		receiverX, receiverY := receiver.GetPosition()
+		euclideanDist := math.Sqrt(math.Pow(receiverX-senderX, 2) + math.Pow(receiverY-senderY, 2))
+		if euclideanDist <= senderRange {
+			select {
+			case receiver.Inbox <- packet:
+			default:
+			}
+		}
 	}
 }

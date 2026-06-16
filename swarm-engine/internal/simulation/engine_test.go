@@ -1,6 +1,7 @@
 package simulation
 
 import (
+	"context"
 	"swarm-engine/internal/machine"
 	"testing"
 	"time"
@@ -140,4 +141,154 @@ func TestEngineTick(t *testing.T) {
 			assert.Equal(t, tc.expectedTargetY, mockMachine.TargetY)
 		})
 	}
+}
+
+func TestGossipRouting(t *testing.T) {
+	testCases := []struct {
+		description string
+		packet      machine.GossipPacket
+	}{
+		{
+			description: "Communication between machines, using multiple hops, executes as expected",
+			packet: machine.GossipPacket{
+				ID:       "msg-001",
+				OriginId: "machine-01",
+				Payload:  "Charging point at (142, 438)",
+				TTL:      3,
+			},
+		},
+		{
+			description: "Message is not forwarded if the TTL has expired",
+			packet: machine.GossipPacket{
+				ID:       "msg-001",
+				OriginId: "machine-01",
+				Payload:  "Charging point at (142, 438)",
+				TTL:      1,
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			mockMachineA := &machine.MachineState{
+				ID:             "machine-01",
+				Name:           "mock machine",
+				State:          "PATROL",
+				X:              10,
+				Y:              10,
+				TargetX:        10,
+				TargetY:        10,
+				BatteryLevel:   100,
+				TickerInterval: time.Millisecond,
+				Blueprint: machine.MachineBlueprint{
+					Locomotion: machine.LocomotionBlueprint{
+						Speed: 10,
+					},
+					Communication: machine.CommunicationBlueprint{
+						Range: 15,
+					},
+				},
+				Inbox:       make(chan machine.GossipPacket, 10),
+				Outbox:      make(chan machine.GossipPacket, 10),
+				SeenPackets: make(map[string]bool),
+			}
+			mockMachineB := &machine.MachineState{
+				ID:             "machine-02",
+				Name:           "mock machine",
+				State:          "PATROL",
+				X:              20,
+				Y:              10,
+				TargetX:        10,
+				TargetY:        10,
+				BatteryLevel:   100,
+				TickerInterval: time.Millisecond,
+				Blueprint: machine.MachineBlueprint{
+					Locomotion: machine.LocomotionBlueprint{
+						Speed: 10,
+					},
+					Communication: machine.CommunicationBlueprint{
+						Range: 15,
+					},
+				},
+				Inbox:       make(chan machine.GossipPacket, 10),
+				Outbox:      make(chan machine.GossipPacket, 10),
+				SeenPackets: make(map[string]bool),
+			}
+			mockMachineC := &machine.MachineState{
+				ID:             "machine-03",
+				Name:           "mock machine",
+				State:          "PATROL",
+				X:              32,
+				Y:              10,
+				TargetX:        10,
+				TargetY:        10,
+				BatteryLevel:   100,
+				TickerInterval: time.Millisecond,
+				Blueprint: machine.MachineBlueprint{
+					Locomotion: machine.LocomotionBlueprint{
+						Speed: 10,
+					},
+					Communication: machine.CommunicationBlueprint{
+						Range: 15,
+					},
+				},
+				Inbox:       make(chan machine.GossipPacket, 10),
+				Outbox:      make(chan machine.GossipPacket, 10),
+				SeenPackets: make(map[string]bool),
+			}
+			mockMachineA.Outbox <- tc.packet
+
+			engine := NewEngine([]*machine.MachineState{mockMachineA, mockMachineB, mockMachineC})
+			// Tick(0) simulates the engine getting the packet from A's outbox and dropping it into B's inbox
+			engine.Tick(0)
+
+			// B should now have the packet, but C should not, since it is out of range of machine A
+			assert.True(t, len(mockMachineB.Inbox) > 0)
+			assert.True(t, len(mockMachineC.Inbox) == 0)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+			defer cancel()
+
+			go mockMachineB.RunLifecycle(ctx)
+
+			<-ctx.Done()
+
+			if tc.packet.TTL > 1 {
+				// Simulate the message being put in C's inbox
+				engine.Tick(0)
+
+				assert.True(t, len(mockMachineC.Inbox) > 0)
+
+				packet := <-mockMachineC.Inbox
+				assert.Equal(t, 2, packet.TTL)
+			} else {
+				// Packet TTL expired before reaching machine C
+				assert.True(t, len(mockMachineC.Inbox) == 0)
+			}
+		})
+	}
+	// engine := NewEngine([]*machine.MachineState{mockMachineA, mockMachineB, mockMachineC})
+	// // Tick(0) simulates the engine getting the packet from A's outbox and dropping it into B's inbox
+	// engine.Tick(0)
+
+	// // B should now have the packet, but C should not, since it is out of range of machine A
+	// assert.True(t, len(mockMachineB.Inbox) > 0)
+	// assert.True(t, len(mockMachineC.Inbox) == 0)
+
+	// ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	// defer cancel()
+
+	// go mockMachineB.RunLifecycle(ctx)
+
+	// <-ctx.Done()
+
+	// // Simulate the message being put in C's inbox
+	// engine.Tick(0)
+
+	// assert.True(t, len(mockMachineC.Inbox) > 0)
+	// select {
+	// case packet := <-mockMachineC.Inbox:
+	// 	assert.Equal(t, 2, packet.TTL)
+	// default:
+	// }
 }
