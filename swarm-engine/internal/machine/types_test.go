@@ -92,7 +92,7 @@ func TestRunLifecycle_StationDiscover(t *testing.T) {
 		Inbox:         make(chan GossipPacket, 10),
 		Outbox:        make(chan GossipPacket, 10),
 		SeenPackets:   make(map[string]bool),
-		KnownStations: make(map[string]time.Time),
+		KnownStations: make(map[string]StationData),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
@@ -128,23 +128,40 @@ func TestGossipNetwork_Transmission(t *testing.T) {
 				Range: 10,
 			},
 		},
-		Inbox:       make(chan GossipPacket, 10),
-		Outbox:      make(chan GossipPacket, 10),
-		SeenPackets: make(map[string]bool),
+		Inbox:         make(chan GossipPacket, 10),
+		Outbox:        make(chan GossipPacket, 10),
+		SeenPackets:   make(map[string]bool),
+		KnownStations: make(map[string]StationData),
 	}
 
 	packet := GossipPacket{
 		ID:       "msg-001",
 		OriginId: "machine-01",
-		Payload:  "Charging station at (257, 521)",
-		TTL:      3,
+		Payload: PacketPayload{
+			Type: PayloadResource,
+			Resource: &ResourceData{
+				ID:   "station-01",
+				Type: ResourceStation,
+				X:    257,
+				Y:    521,
+			},
+		},
+		TTL: 3,
 	}
 
 	packet2 := GossipPacket{
 		ID:       "msg-002",
 		OriginId: "machine-01",
-		Payload:  "Charging station at (351, 428)",
-		TTL:      3,
+		Payload: PacketPayload{
+			Type: PayloadResource,
+			Resource: &ResourceData{
+				ID:   "station-02",
+				Type: ResourceStation,
+				X:    351,
+				Y:    428,
+			},
+		},
+		TTL: 3,
 	}
 
 	testCases := []struct {

@@ -130,7 +130,7 @@ func TestEngineTick(t *testing.T) {
 				SeenPackets: make(map[string]bool),
 			}
 
-			engine := NewEngine([]*machine.MachineState{mockMachine})
+			engine := NewEngine([]*machine.MachineState{mockMachine}, 0.0)
 			engine.Tick(tc.dt)
 
 			assert.Equal(t, tc.expectedX, mockMachine.X)
@@ -153,8 +153,16 @@ func TestGossipRouting(t *testing.T) {
 			packet: machine.GossipPacket{
 				ID:       "msg-001",
 				OriginId: "machine-01",
-				Payload:  "Charging point at (142, 438)",
-				TTL:      3,
+				Payload: machine.PacketPayload{
+					Type: machine.PayloadResource,
+					Resource: &machine.ResourceData{
+						ID:   "station-01",
+						Type: machine.ResourceStation,
+						X:    142,
+						Y:    438,
+					},
+				},
+				TTL: 3,
 			},
 		},
 		{
@@ -162,8 +170,16 @@ func TestGossipRouting(t *testing.T) {
 			packet: machine.GossipPacket{
 				ID:       "msg-001",
 				OriginId: "machine-01",
-				Payload:  "Charging point at (142, 438)",
-				TTL:      1,
+				Payload: machine.PacketPayload{
+					Type: machine.PayloadResource,
+					Resource: &machine.ResourceData{
+						ID:   "station-01",
+						Type: machine.ResourceStation,
+						X:    142,
+						Y:    438,
+					},
+				},
+				TTL: 1,
 			},
 		},
 	}
@@ -188,9 +204,10 @@ func TestGossipRouting(t *testing.T) {
 						Range: 15,
 					},
 				},
-				Inbox:       make(chan machine.GossipPacket, 10),
-				Outbox:      make(chan machine.GossipPacket, 10),
-				SeenPackets: make(map[string]bool),
+				Inbox:         make(chan machine.GossipPacket, 10),
+				Outbox:        make(chan machine.GossipPacket, 10),
+				SeenPackets:   make(map[string]bool),
+				KnownStations: make(map[string]machine.StationData),
 			}
 			mockMachineB := &machine.MachineState{
 				ID:             "machine-02",
@@ -210,9 +227,10 @@ func TestGossipRouting(t *testing.T) {
 						Range: 15,
 					},
 				},
-				Inbox:       make(chan machine.GossipPacket, 10),
-				Outbox:      make(chan machine.GossipPacket, 10),
-				SeenPackets: make(map[string]bool),
+				Inbox:         make(chan machine.GossipPacket, 10),
+				Outbox:        make(chan machine.GossipPacket, 10),
+				SeenPackets:   make(map[string]bool),
+				KnownStations: make(map[string]machine.StationData),
 			}
 			mockMachineC := &machine.MachineState{
 				ID:             "machine-03",
@@ -232,13 +250,14 @@ func TestGossipRouting(t *testing.T) {
 						Range: 15,
 					},
 				},
-				Inbox:       make(chan machine.GossipPacket, 10),
-				Outbox:      make(chan machine.GossipPacket, 10),
-				SeenPackets: make(map[string]bool),
+				Inbox:         make(chan machine.GossipPacket, 10),
+				Outbox:        make(chan machine.GossipPacket, 10),
+				SeenPackets:   make(map[string]bool),
+				KnownStations: make(map[string]machine.StationData),
 			}
 			mockMachineA.Outbox <- tc.packet
 
-			engine := NewEngine([]*machine.MachineState{mockMachineA, mockMachineB, mockMachineC})
+			engine := NewEngine([]*machine.MachineState{mockMachineA, mockMachineB, mockMachineC}, 0.0)
 			// Tick(0) simulates the engine getting the packet from A's outbox and dropping it into B's inbox
 			engine.Tick(0)
 
@@ -258,37 +277,146 @@ func TestGossipRouting(t *testing.T) {
 				engine.Tick(0)
 
 				assert.True(t, len(mockMachineC.Inbox) > 0)
+				assert.True(t, len(mockMachineB.GetSeenPackets()) == 1)
 
 				packet := <-mockMachineC.Inbox
 				assert.Equal(t, 2, packet.TTL)
 			} else {
 				// Packet TTL expired before reaching machine C
+				assert.True(t, len(mockMachineB.GetSeenPackets()) == 1)
 				assert.True(t, len(mockMachineC.Inbox) == 0)
 			}
 		})
 	}
-	// engine := NewEngine([]*machine.MachineState{mockMachineA, mockMachineB, mockMachineC})
-	// // Tick(0) simulates the engine getting the packet from A's outbox and dropping it into B's inbox
-	// engine.Tick(0)
+}
 
-	// // B should now have the packet, but C should not, since it is out of range of machine A
-	// assert.True(t, len(mockMachineB.Inbox) > 0)
-	// assert.True(t, len(mockMachineC.Inbox) == 0)
+func TestGossipRouting_BeaconBroadcast(t *testing.T) {
+	testCases := []struct {
+		description               string
+		packet                    machine.GossipPacket
+		secondsSinceLastBroadcast float64
+		broadcastShouldHappen     bool
+	}{
+		{
+			description: "If there is an entry in KnownStations, it continues to broadcast.",
+			packet: machine.GossipPacket{
+				ID:       "msg-001",
+				OriginId: "machine-01",
+				Payload: machine.PacketPayload{
+					Type: machine.PayloadResource,
+					Resource: &machine.ResourceData{
+						ID:   "station-01",
+						Type: machine.ResourceStation,
+						X:    142,
+						Y:    438,
+					},
+				},
+				TTL: 3,
+			},
+			secondsSinceLastBroadcast: 1.0,
+			broadcastShouldHappen:     true,
+		},
+		{
+			description: "Entry in KnownStations does not broadcast if enough time has not passed",
+			packet: machine.GossipPacket{
+				ID:       "msg-001",
+				OriginId: "machine-01",
+				Payload: machine.PacketPayload{
+					Type: machine.PayloadResource,
+					Resource: &machine.ResourceData{
+						ID:   "station-01",
+						Type: machine.ResourceStation,
+						X:    142,
+						Y:    438,
+					},
+				},
+				TTL: 3,
+			},
+			secondsSinceLastBroadcast: 0.5,
+			broadcastShouldHappen:     false,
+		},
+	}
 
-	// ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
-	// defer cancel()
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			mockMachineA := &machine.MachineState{
+				ID:             "machine-01",
+				Name:           "mock machine A",
+				State:          "PATROL",
+				X:              10,
+				Y:              10,
+				TargetX:        10,
+				TargetY:        10,
+				BatteryLevel:   100,
+				TickerInterval: time.Millisecond,
+				Blueprint: machine.MachineBlueprint{
+					Locomotion: machine.LocomotionBlueprint{
+						Speed: 10,
+					},
+					Communication: machine.CommunicationBlueprint{
+						Range: 15,
+					},
+				},
+				Inbox:       make(chan machine.GossipPacket, 10),
+				Outbox:      make(chan machine.GossipPacket, 10),
+				SeenPackets: make(map[string]bool),
+				KnownStations: map[string]machine.StationData{
+					tc.packet.ID: {
+						DiscoveredAt: time.Now(),
+						X:            142,
+						Y:            438,
+					},
+				},
+			}
+			mockMachineB := &machine.MachineState{
+				ID:             "machine-02",
+				Name:           "mock machine B",
+				State:          "PATROL",
+				X:              20,
+				Y:              10,
+				TargetX:        10,
+				TargetY:        10,
+				BatteryLevel:   100,
+				TickerInterval: time.Millisecond,
+				Blueprint: machine.MachineBlueprint{
+					Locomotion: machine.LocomotionBlueprint{
+						Speed: 10,
+					},
+					Communication: machine.CommunicationBlueprint{
+						Range: 15,
+					},
+				},
+				Inbox:         make(chan machine.GossipPacket, 10),
+				Outbox:        make(chan machine.GossipPacket, 10),
+				SeenPackets:   make(map[string]bool),
+				KnownStations: make(map[string]machine.StationData),
+			}
 
-	// go mockMachineB.RunLifecycle(ctx)
+			engine := NewEngine([]*machine.MachineState{mockMachineA, mockMachineB}, tc.secondsSinceLastBroadcast)
+			// mockMachineA has a known location, but it isn't in the outbox, so this is a case where the "gossip" was sent once before, and needs
+			// to be re-transmitted, which is handled by the engine. So run a "Tick".
+			engine.Tick(0)
 
-	// <-ctx.Done()
+			if tc.broadcastShouldHappen {
+				assert.True(t, len(mockMachineB.Inbox) == 1)
+			} else {
+				assert.True(t, len(mockMachineB.Inbox) == 0)
+			}
 
-	// // Simulate the message being put in C's inbox
-	// engine.Tick(0)
+			// Run the lifecycle once, just to observe the Inbox being processed. There should be an entry in SeenPackets if
+			// a broadcast happened.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+			defer cancel()
 
-	// assert.True(t, len(mockMachineC.Inbox) > 0)
-	// select {
-	// case packet := <-mockMachineC.Inbox:
-	// 	assert.Equal(t, 2, packet.TTL)
-	// default:
-	// }
+			go mockMachineB.RunLifecycle(ctx)
+
+			<-ctx.Done()
+
+			if tc.broadcastShouldHappen {
+				assert.True(t, len(mockMachineB.SeenPackets) == 1)
+			} else {
+				assert.True(t, len(mockMachineB.SeenPackets) == 0)
+			}
+		})
+	}
 }

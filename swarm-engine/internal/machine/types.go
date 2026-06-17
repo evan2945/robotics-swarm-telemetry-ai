@@ -48,29 +48,59 @@ type CauldronRegistry map[string]MachineBlueprint
 type GossipPacket struct {
 	ID       string
 	OriginId string
-	Payload  string
+	Payload  PacketPayload
 	TTL      int
+}
+
+type PayloadType string
+
+const (
+	PayloadResource PayloadType = "RESOURCE"
+)
+
+type ResourceType string
+
+const (
+	ResourceStation ResourceType = "STATION"
+)
+
+type ResourceData struct {
+	ID   string       `json:"id"`
+	Type ResourceType `json:"type"`
+	X    float64      `json:"x"`
+	Y    float64      `json:"y"`
+}
+
+type PacketPayload struct {
+	Type     PayloadType   `json:"type"`
+	Resource *ResourceData `json:"resource,omitempty"`
+}
+
+type StationData struct {
+	DiscoveredAt time.Time `json:"discovered_at"`
+	X            float64   `json:"x"`
+	Y            float64   `json:"y"`
 }
 
 type MachineState struct {
 	mu             sync.Mutex
 	Inbox          chan GossipPacket
 	Outbox         chan GossipPacket
-	ID             string               `json:"id"`
-	Name           string               `json:"name"`
-	State          string               `json:"state"`
-	X              float64              `json:"x"`
-	Y              float64              `json:"y"`
-	TargetX        float64              `json:"target_x"`
-	TargetY        float64              `json:"target_y"`
-	Vx             float64              `json:"v_x"`
-	Vy             float64              `json:"v_y"`
-	BatteryLevel   float64              `json:"battery_level"`
-	Blueprint      MachineBlueprint     `json:"blueprint"`
-	TickerInterval time.Duration        `json:"ticker_interval"`
-	SeenPackets    map[string]bool      `json:"seen_packets"`
-	Env            Environment          `json:"environment"`
-	KnownStations  map[string]time.Time `json:"known_stations"`
+	ID             string                 `json:"id"`
+	Name           string                 `json:"name"`
+	State          string                 `json:"state"`
+	X              float64                `json:"x"`
+	Y              float64                `json:"y"`
+	TargetX        float64                `json:"target_x"`
+	TargetY        float64                `json:"target_y"`
+	Vx             float64                `json:"v_x"`
+	Vy             float64                `json:"v_y"`
+	BatteryLevel   float64                `json:"battery_level"`
+	Blueprint      MachineBlueprint       `json:"blueprint"`
+	TickerInterval time.Duration          `json:"ticker_interval"`
+	SeenPackets    map[string]bool        `json:"seen_packets"`
+	Env            Environment            `json:"environment"`
+	KnownStations  map[string]StationData `json:"known_stations"`
 }
 
 type WorldItem struct {
@@ -105,13 +135,14 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 
 			knownStations := m.GetKnownStations()
 			for _, item := range seenItems {
+				now := time.Now()
 				if _, ok := knownStations[item.ID]; !ok {
-					m.AddToKnownStations(item.ID)
+					m.AddToKnownStations(item)
 					m.Outbox <- GossipPacket{
-						ID: fmt.Sprintf("%s:%s", item.ID, m.GetId()),
+						ID: fmt.Sprintf("%s:%s:%s", item.ID, m.GetId(), now),
 					}
 				} else {
-					m.UpdateKnownStationsTime(item.ID, time.Now())
+					m.UpdateKnownStationsTime(item.ID, now)
 				}
 			}
 
@@ -120,8 +151,20 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 
 			if !m.HasSeenPacket(packet.ID) {
 				m.AddSeenPacket(packet.ID)
-				packet.TTL -= 1
 
+				if packet.Payload.Resource.Type == ResourceStation {
+					knownStations := m.GetKnownStations()
+					resource := packet.Payload.Resource
+					if _, ok := knownStations[resource.ID]; !ok {
+						m.AddToKnownStations(WorldItem{
+							ID:   resource.ID,
+							Type: string(resource.Type),
+							X:    resource.X,
+							Y:    resource.Y,
+						})
+					}
+				}
+				packet.TTL -= 1
 				if packet.TTL > 0 {
 					m.QueuePacketToSend(packet)
 				}
@@ -259,13 +302,13 @@ func (m *MachineState) QueuePacketToSend(packet GossipPacket) {
 	m.Outbox <- packet
 }
 
-func (m *MachineState) GetKnownStations() map[string]time.Time {
+func (m *MachineState) GetKnownStations() map[string]StationData {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Janitor phase
-	for id, t := range m.KnownStations {
-		if time.Since(t) > 10*time.Second {
+	for id, data := range m.KnownStations {
+		if time.Since(data.DiscoveredAt) > 10*time.Second {
 			delete(m.KnownStations, id)
 		}
 	}
@@ -273,16 +316,48 @@ func (m *MachineState) GetKnownStations() map[string]time.Time {
 	return m.KnownStations
 }
 
-func (m *MachineState) AddToKnownStations(newStationId string) {
+func (m *MachineState) AddToKnownStations(item WorldItem) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.KnownStations[newStationId] = time.Now()
+	m.KnownStations[item.ID] = StationData{
+		DiscoveredAt: time.Now(),
+		X:            item.X,
+		Y:            item.Y,
+	}
 }
 
 func (m *MachineState) UpdateKnownStationsTime(id string, t time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.KnownStations[id] = t
+	station := m.KnownStations[id]
+	station.DiscoveredAt = t
+}
+
+func (m *MachineState) GetActiveBeacons() []GossipPacket {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var packets []GossipPacket
+	for stationId, stationData := range m.KnownStations {
+		if time.Since(stationData.DiscoveredAt) < 10*time.Second {
+			packets = append(packets, GossipPacket{
+				ID:       fmt.Sprintf("%s:%s:%s", m.ID, stationId, stationData.DiscoveredAt),
+				OriginId: m.ID,
+				Payload: PacketPayload{
+					Type: PayloadResource,
+					Resource: &ResourceData{
+						ID:   stationId,
+						Type: ResourceStation,
+						X:    stationData.X,
+						Y:    stationData.Y,
+					},
+				},
+				TTL: 2,
+			})
+		}
+	}
+
+	return packets
 }

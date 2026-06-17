@@ -7,20 +7,22 @@ import (
 )
 
 type Engine struct {
-	Height   float64
-	Width    float64
-	Ticker   *time.Ticker
-	Machines []*machine.MachineState
-	Items    []machine.WorldItem
+	Height                 float64
+	Width                  float64
+	Ticker                 *time.Ticker
+	Machines               []*machine.MachineState
+	TimeSinceLastBroadcast float64
+	Items                  []machine.WorldItem
 }
 
-func NewEngine(machines []*machine.MachineState) *Engine {
+func NewEngine(machines []*machine.MachineState, secondsSinceLastBroadcast float64) *Engine {
 	e := &Engine{
-		Height:   600.00,
-		Width:    800.00,
-		Ticker:   time.NewTicker(time.Second / 60),
-		Machines: machines,
-		Items:    []machine.WorldItem{},
+		Height:                 600.00,
+		Width:                  800.00,
+		Ticker:                 time.NewTicker(time.Second / 60),
+		Machines:               machines,
+		TimeSinceLastBroadcast: secondsSinceLastBroadcast,
+		Items:                  []machine.WorldItem{},
 	}
 
 	for _, m := range e.Machines {
@@ -31,6 +33,13 @@ func NewEngine(machines []*machine.MachineState) *Engine {
 }
 
 func (e *Engine) Tick(dt float64) {
+	e.TimeSinceLastBroadcast += dt
+
+	isBeaconFrame := e.TimeSinceLastBroadcast >= 1.0
+	if isBeaconFrame {
+		e.TimeSinceLastBroadcast = 0.0
+	}
+
 	for _, m := range e.Machines {
 		mVx, mVy := m.GetHeading()
 		mX, mY := m.GetPosition()
@@ -74,6 +83,13 @@ func (e *Engine) Tick(dt float64) {
 				break DrainingOutbox
 			}
 		}
+
+		if isBeaconFrame {
+			beacons := m.GetActiveBeacons()
+			for _, packet := range beacons {
+				e.broadcastPacket(m, packet)
+			}
+		}
 	}
 }
 
@@ -104,6 +120,8 @@ func (e *Engine) broadcastPacket(sender *machine.MachineState, packet machine.Go
 	}
 }
 
+// A machine will call this method to see if anything in the environment is within
+// visual range.
 func (e *Engine) GetVisibleItems(x, y, visionRange float64) []machine.WorldItem {
 	visibleItems := []machine.WorldItem{}
 
