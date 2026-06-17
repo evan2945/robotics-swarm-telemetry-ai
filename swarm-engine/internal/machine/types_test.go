@@ -2,11 +2,39 @@ package machine
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 )
+
+type MockEnvironment struct {
+	ItemsToReturn []WorldItem
+}
+
+func (m *MockEnvironment) GetVisibleItems(x, y, visionRange float64) []WorldItem {
+	items := []WorldItem{
+		{
+			ID:   "station-1",
+			Type: "CHARGING_STATION",
+			X:    105,
+			Y:    105,
+		},
+	}
+
+	for _, item := range items {
+		x_dist := item.X - x
+		y_dist := item.Y - y
+		eucl_distance := math.Sqrt(math.Pow(x_dist, 2) + math.Pow(y_dist, 2))
+
+		if eucl_distance <= visionRange {
+			m.ItemsToReturn = append(m.ItemsToReturn, item)
+		}
+	}
+
+	return m.ItemsToReturn
+}
 
 func TestRunLifecycle(t *testing.T) {
 	mockMachine := &MachineState{
@@ -37,6 +65,48 @@ func TestRunLifecycle(t *testing.T) {
 	<-ctx.Done()
 
 	assert.Equal(t, mockMachine.BatteryLevel, 95.0)
+}
+
+func TestRunLifecycle_StationDiscover(t *testing.T) {
+	mockEnv := &MockEnvironment{}
+
+	mockMachine := &MachineState{
+		ID:             "machine-01",
+		Name:           "mock machine",
+		State:          "PATROL",
+		X:              100,
+		Y:              100,
+		TargetX:        100,
+		TargetY:        100,
+		BatteryLevel:   100,
+		Env:            mockEnv,
+		TickerInterval: time.Millisecond,
+		Blueprint: MachineBlueprint{
+			Battery: BatteryBlueprint{
+				DrainRate: 1.0,
+			},
+			Vision: VisionBlueprint{
+				Range: 15,
+			},
+		},
+		Inbox:         make(chan GossipPacket, 10),
+		Outbox:        make(chan GossipPacket, 10),
+		SeenPackets:   make(map[string]bool),
+		KnownStations: make(map[string]time.Time),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+
+	go mockMachine.RunLifecycle(ctx)
+
+	<-ctx.Done()
+
+	knownStations := mockMachine.GetKnownStations()
+	assert.Equal(t, len(knownStations), 1)
+	assert.Contains(t, knownStations, mockEnv.ItemsToReturn[0].ID)
+
+	assert.True(t, len(mockMachine.Outbox) == 1)
 }
 
 func TestGossipNetwork_Transmission(t *testing.T) {

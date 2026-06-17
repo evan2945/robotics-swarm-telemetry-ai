@@ -11,15 +11,23 @@ type Engine struct {
 	Width    float64
 	Ticker   *time.Ticker
 	Machines []*machine.MachineState
+	Items    []machine.WorldItem
 }
 
 func NewEngine(machines []*machine.MachineState) *Engine {
-	return &Engine{
+	e := &Engine{
 		Height:   600.00,
 		Width:    800.00,
 		Ticker:   time.NewTicker(time.Second / 60),
 		Machines: machines,
+		Items:    []machine.WorldItem{},
 	}
+
+	for _, m := range e.Machines {
+		m.Env = e
+	}
+
+	return e
 }
 
 func (e *Engine) Tick(dt float64) {
@@ -69,6 +77,9 @@ func (e *Engine) Tick(dt float64) {
 	}
 }
 
+// broadcastPacket acts as the broadcaster of messages. Since in the simulation there really
+// isn't a way for the machines to communicate via broadcast, the engine will act as the
+// broadcaster and "medium" through which the broadcast travels to keep things simple.
 func (e *Engine) broadcastPacket(sender *machine.MachineState, packet machine.GossipPacket) {
 	senderX, senderY := sender.GetPosition()
 	senderRange := sender.GetBlueprint().Communication.Range
@@ -91,4 +102,20 @@ func (e *Engine) broadcastPacket(sender *machine.MachineState, packet machine.Go
 			}
 		}
 	}
+}
+
+func (e *Engine) GetVisibleItems(x, y, visionRange float64) []machine.WorldItem {
+	visibleItems := []machine.WorldItem{}
+
+	for _, item := range e.Items {
+		x_dist := item.X - x
+		y_dist := item.Y - y
+		eucl_distance := math.Sqrt(math.Pow(x_dist, 2) + math.Pow(y_dist, 2))
+
+		if eucl_distance <= visionRange {
+			visibleItems = append(visibleItems, item)
+		}
+	}
+
+	return visibleItems
 }

@@ -98,6 +98,23 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 			m.SetBatteryLevel(battery_level - blueprint.Battery.DrainRate)
 			fmt.Printf("Machine %s battery: %f\n", m.GetName(), m.GetBatteryLevel())
 
+			seenItems := []WorldItem{}
+			if m.Env != nil {
+				seenItems = m.Env.GetVisibleItems(m.X, m.Y, blueprint.Vision.Range)
+			}
+
+			knownStations := m.GetKnownStations()
+			for _, item := range seenItems {
+				if _, ok := knownStations[item.ID]; !ok {
+					m.AddToKnownStations(item.ID)
+					m.Outbox <- GossipPacket{
+						ID: fmt.Sprintf("%s:%s", item.ID, m.GetId()),
+					}
+				} else {
+					m.UpdateKnownStationsTime(item.ID, time.Now())
+				}
+			}
+
 		case packet := <-m.Inbox:
 			fmt.Printf("[%s] Received Gossip Packet: %s from %s\n", m.GetName(), packet.ID, packet.OriginId)
 
@@ -246,5 +263,26 @@ func (m *MachineState) GetKnownStations() map[string]time.Time {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Janitor phase
+	for id, t := range m.KnownStations {
+		if time.Since(t) > 10*time.Second {
+			delete(m.KnownStations, id)
+		}
+	}
+
 	return m.KnownStations
+}
+
+func (m *MachineState) AddToKnownStations(newStationId string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.KnownStations[newStationId] = time.Now()
+}
+
+func (m *MachineState) UpdateKnownStationsTime(id string, t time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.KnownStations[id] = t
 }
