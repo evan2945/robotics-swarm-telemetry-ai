@@ -56,19 +56,32 @@ type MachineState struct {
 	mu             sync.Mutex
 	Inbox          chan GossipPacket
 	Outbox         chan GossipPacket
-	ID             string           `json:"id"`
-	Name           string           `json:"name"`
-	State          string           `json:"state"`
-	X              float64          `json:"x"`
-	Y              float64          `json:"y"`
-	TargetX        float64          `json:"target_x"`
-	TargetY        float64          `json:"target_y"`
-	Vx             float64          `json:"v_x"`
-	Vy             float64          `json:"v_y"`
-	BatteryLevel   float64          `json:"battery_level"`
-	Blueprint      MachineBlueprint `json:"blueprint"`
-	TickerInterval time.Duration    `json:"ticker_interval"`
-	SeenPackets    map[string]bool  `json:"seen_packets"`
+	ID             string               `json:"id"`
+	Name           string               `json:"name"`
+	State          string               `json:"state"`
+	X              float64              `json:"x"`
+	Y              float64              `json:"y"`
+	TargetX        float64              `json:"target_x"`
+	TargetY        float64              `json:"target_y"`
+	Vx             float64              `json:"v_x"`
+	Vy             float64              `json:"v_y"`
+	BatteryLevel   float64              `json:"battery_level"`
+	Blueprint      MachineBlueprint     `json:"blueprint"`
+	TickerInterval time.Duration        `json:"ticker_interval"`
+	SeenPackets    map[string]bool      `json:"seen_packets"`
+	Env            Environment          `json:"environment"`
+	KnownStations  map[string]time.Time `json:"known_stations"`
+}
+
+type WorldItem struct {
+	ID   string  `json:"id"`
+	Type string  `json:"type"`
+	X    float64 `json:"x"`
+	Y    float64 `json:"y"`
+}
+
+type Environment interface {
+	GetVisibleItems(x, y float64, visionRange float64) []WorldItem
 }
 
 func (m *MachineState) RunLifecycle(ctx context.Context) {
@@ -227,4 +240,11 @@ func (m *MachineState) QueuePacketToSend(packet GossipPacket) {
 	defer m.mu.Unlock()
 
 	m.Outbox <- packet
+}
+
+func (m *MachineState) GetKnownStations() map[string]time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.KnownStations
 }
