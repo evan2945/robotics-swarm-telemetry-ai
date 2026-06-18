@@ -104,10 +104,10 @@ type MachineState struct {
 }
 
 type WorldItem struct {
-	ID   string  `json:"id"`
-	Type string  `json:"type"`
-	X    float64 `json:"x"`
-	Y    float64 `json:"y"`
+	ID   string       `json:"id"`
+	Type ResourceType `json:"type"`
+	X    float64      `json:"x"`
+	Y    float64      `json:"y"`
 }
 
 type Environment interface {
@@ -158,7 +158,7 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 					if _, ok := knownStations[resource.ID]; !ok {
 						m.AddToKnownStations(WorldItem{
 							ID:   resource.ID,
-							Type: string(resource.Type),
+							Type: resource.Type,
 							X:    resource.X,
 							Y:    resource.Y,
 						})
