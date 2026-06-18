@@ -2,6 +2,7 @@ package simulation
 
 import (
 	"math"
+	"math/rand"
 	"swarm-engine/internal/machine"
 	"time"
 )
@@ -44,9 +45,34 @@ func (e *Engine) Tick(dt float64) {
 		mVx, mVy := m.GetHeading()
 		mX, mY := m.GetPosition()
 		mTargetX, mTargetY := m.GetTarget()
-		mBlueprint := m.GetBlueprint()
+		locBlueprint := m.GetBlueprint().Locomotion
+		mState := m.GetState()
+		mSpeed := locBlueprint.Speed
 
-		mVx, mVy = machine.CalculateHeading(mX, mY, mTargetX, mTargetY, mBlueprint.Locomotion.Speed)
+		if mState == "LOW_POWER" {
+			mSpeed = locBlueprint.LowPowerSpeed
+
+			if getEuclDistance(mX, mY, mTargetX, mTargetY) > 5.0 {
+				// If the machine is in low power mode, it needs to head to
+				// the closest charging station.
+				knownStations := m.GetKnownStations()
+				if len(knownStations) > 0 {
+					dist := -1.0
+					var targetStation *machine.StationData
+					for _, station := range knownStations {
+						newDist := getEuclDistance(mX, mY, station.X, station.Y)
+						if dist == -1 || newDist < dist {
+							dist = newDist
+							targetStation = station
+						}
+					}
+
+					m.SetTarget(targetStation.X, targetStation.Y)
+				}
+			}
+		}
+
+		mVx, mVy = machine.CalculateHeading(mX, mY, mTargetX, mTargetY, mSpeed)
 		mX = mX + (mVx * dt)
 		mY = mY + (mVy * dt)
 
@@ -70,9 +96,18 @@ func (e *Engine) Tick(dt float64) {
 			mTargetY = e.Height - (mTargetY - e.Height)
 		}
 
+		distance := getEuclDistance(mX, mY, mTargetX, mTargetY)
+
+		if mState != "LOW_POWER" {
+			if distance < 5.0 {
+				m.SetTarget(rand.Float64()*e.Width, rand.Float64()*e.Height)
+			} else {
+				m.SetTarget(mTargetX, mTargetY)
+			}
+		}
+
 		m.SetPosition(mX, mY)
 		m.SetHeading(mVx, mVy)
-		m.SetTarget(mTargetX, mTargetY)
 
 	DrainingOutbox:
 		for {
@@ -98,7 +133,13 @@ func (e *Engine) Tick(dt float64) {
 // broadcaster and "medium" through which the broadcast travels to keep things simple.
 func (e *Engine) broadcastPacket(sender *machine.MachineState, packet machine.GossipPacket) {
 	senderX, senderY := sender.GetPosition()
-	senderRange := sender.GetBlueprint().Communication.Range
+	commBlueprint := sender.GetBlueprint().Communication
+	senderState := sender.GetState()
+	senderRange := commBlueprint.Range
+
+	if senderState == "LOW_POWER" {
+		senderRange = commBlueprint.LowPowerRange
+	}
 
 	for _, receiver := range e.Machines {
 		if receiver.GetId() == sender.GetId() {
@@ -110,7 +151,7 @@ func (e *Engine) broadcastPacket(sender *machine.MachineState, packet machine.Go
 		}
 
 		receiverX, receiverY := receiver.GetPosition()
-		euclideanDist := math.Sqrt(math.Pow(receiverX-senderX, 2) + math.Pow(receiverY-senderY, 2))
+		euclideanDist := getEuclDistance(senderX, senderY, receiverX, receiverY)
 		if euclideanDist <= senderRange {
 			select {
 			case receiver.Inbox <- packet:
@@ -126,9 +167,7 @@ func (e *Engine) GetVisibleItems(x, y, visionRange float64) []machine.WorldItem 
 	visibleItems := []machine.WorldItem{}
 
 	for _, item := range e.Items {
-		x_dist := item.X - x
-		y_dist := item.Y - y
-		eucl_distance := math.Sqrt(math.Pow(x_dist, 2) + math.Pow(y_dist, 2))
+		eucl_distance := getEuclDistance(x, y, item.X, item.Y)
 
 		if eucl_distance <= visionRange {
 			visibleItems = append(visibleItems, item)
@@ -136,4 +175,8 @@ func (e *Engine) GetVisibleItems(x, y, visionRange float64) []machine.WorldItem 
 	}
 
 	return visibleItems
+}
+
+func getEuclDistance(x1, y1, x2, y2 float64) float64 {
+	return math.Sqrt(math.Pow(x2-x1, 2) + math.Pow(y2-y1, 2))
 }

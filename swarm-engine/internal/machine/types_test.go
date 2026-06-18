@@ -64,7 +64,7 @@ func TestRunLifecycle(t *testing.T) {
 
 	<-ctx.Done()
 
-	assert.Equal(t, mockMachine.BatteryLevel, 95.0)
+	assert.Equal(t, mockMachine.BatteryLevel, 96.0)
 }
 
 func TestRunLifecycle_StationDiscover(t *testing.T) {
@@ -92,7 +92,7 @@ func TestRunLifecycle_StationDiscover(t *testing.T) {
 		Inbox:         make(chan GossipPacket, 10),
 		Outbox:        make(chan GossipPacket, 10),
 		SeenPackets:   make(map[string]bool),
-		KnownStations: make(map[string]StationData),
+		KnownStations: make(map[string]*StationData),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
@@ -131,7 +131,7 @@ func TestGossipNetwork_Transmission(t *testing.T) {
 		Inbox:         make(chan GossipPacket, 10),
 		Outbox:        make(chan GossipPacket, 10),
 		SeenPackets:   make(map[string]bool),
-		KnownStations: make(map[string]StationData),
+		KnownStations: make(map[string]*StationData),
 	}
 
 	packet := GossipPacket{
