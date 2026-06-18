@@ -2,6 +2,7 @@ import sys
 import threading
 import pygame
 import redis
+import json
 
 # Initialize Pygame
 pygame.init()
@@ -13,6 +14,10 @@ FPS = 60
 # Colors (RGB)
 BG_COLOR = (30, 30, 30)
 CIRCLE_COLOR = (0, 255, 128)
+WATCHER_COLOR = (0, 255, 128)
+SCRAPPER_COLOR = (238, 130, 238)
+LOW_POWER_COLOR = (255, 140, 0)
+DEFAULT_COLOR = (200, 200, 200)
 
 # Set up the display canvas
 screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -23,9 +28,11 @@ clock = pygame.time.Clock()
 # Keys will be the machine name, values will be a tuple/list of (x, y)
 telemetry_state = {}
 
-def fetch_telemetry():
+# This method was used to validate fetching telemetry from redis and isn't
+# used in the actual simulation
+def fetch_mock_telemetry():
     """Background worker that continuously pulls data from the Redis Stream."""
-    r_client = redis.Redis(host="localhost", port=6379, decode_responses=True)
+    r_client = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
     stream_name = "swarm:machine_01:telemetry"
     
     # Start by listening only for messages that arrive AFTER this thread boots
@@ -57,6 +64,35 @@ def fetch_telemetry():
         except redis.RedisError as e:
             print(f"[Telemetry Thread] Redis Error: {e}")
 
+def fetch_telemetry():
+    """Background worker that continuously pulls unified frames from the Redis Stream."""
+    # Ensure decode_responses=True so we get clean strings instead of bytes
+    r_client = redis.Redis(host="localhost", port=6379, db=0, decode_responses=True)
+    stream_name = "swarm:telemetry"  # Your unified stream key
+    
+    last_id = "$"
+    print("[Telemetry Thread] Connected to Redis, listening for unified swarm frames...")
+    
+    while True:
+        try:
+            # Block for up to 100ms waiting for new 60Hz physics frames
+            response = r_client.xread(streams={stream_name: last_id}, block=100)
+            
+            if response:
+                latest_message = response[0][1][-1]
+                msg_id = latest_message[0]
+                data = latest_message[1]
+                
+                last_id = msg_id
+                
+                if "frame" in data:
+                    frame_snapshot = json.loads(data["frame"])
+                    
+                    telemetry_state["latest_frame"] = frame_snapshot
+
+        except redis.RedisError as e:
+            print(f"[Telemetry Thread] Redis Error: {e}")
+
 
 def main():
     # Spin up the telemetry consumer thread in the background
@@ -74,13 +110,41 @@ def main():
 
         screen.fill(BG_COLOR)
         
-        # Check if our background thread has successfully captured data yet
-        if "machine_01" in telemetry_state:
-            # Pull the coordinates directly out of our shared thread state
-            pos = telemetry_state["machine_01"]
-            pygame.draw.circle(screen, CIRCLE_COLOR, (int(pos[0]), int(pos[1])), 15)
+        current_frame = telemetry_state.get("latest_frame")
+        
+        if current_frame:
+            if "items" in current_frame:
+                STATION_COLOR = (0, 128, 255)
+                for item in current_frame["items"]:
+                    if item.get("type") == "CHARGING_STATION":
+                        ix = int(item.get("x", 0))
+                        iy = int(item.get("y", 0))
+                        pygame.draw.circle(screen, STATION_COLOR, (ix, iy), 18)
+
+            if "machines" in current_frame:
+                color = (0, 0, 0)
+                for mach in current_frame["machines"]:
+                    x = int(mach.get("x", 0))
+                    y = int(mach.get("y", 0))
+                    m_type = mach.get("name")
+                    state = mach.get("state", "PATROL")
+                    if m_type == "WATCHER":
+                        color = WATCHER_COLOR
+                    elif m_type == "SCRAPPER":
+                        color = SCRAPPER_COLOR
+                    else:
+                        color = DEFAULT_COLOR
+                    
+                    # Pick a color based on state (helps with our upcoming low-power milestone!)
+                    if state == "LOW_POWER":
+                        color = LOW_POWER_COLOR
+                    
+                    # Draw the physical machine
+                    pygame.draw.circle(screen, color, (x, y), 12)
+                
+                    # Optional: If you want to render the text ID above them, you can use pygame.font
         else:
-            # Fallback text or shape if Redis hasn't gotten data yet
+            # Fallback graphic if Go engine isn't running or streaming yet
             pygame.draw.circle(screen, (100, 100, 100), (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2), 15)
         
         pygame.display.flip()
