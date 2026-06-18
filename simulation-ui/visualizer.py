@@ -6,6 +6,7 @@ import json
 
 # Initialize Pygame
 pygame.init()
+machine_font = pygame.font.SysFont("Arial", 14, bold=True)
 
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
@@ -142,7 +143,19 @@ def main():
                     # Draw the physical machine
                     pygame.draw.circle(screen, color, (x, y), 12)
                 
-                    # Optional: If you want to render the text ID above them, you can use pygame.font
+                    if m_type:
+                        # Take the first letter of the machine name (e.g., "W", "S")
+                        label_letter = m_type[0].upper()
+                        
+                        # Render the letter to a text surface (using crisp white text)
+                        text_surface = machine_font.render(label_letter, True, (0, 0, 0))
+                        
+                        # Get the surface bounding rect and pin its center to the circle's center
+                        text_rect = text_surface.get_rect()
+                        text_rect.center = (x, y)
+                        
+                        # Blit the text surface onto the screen
+                        screen.blit(text_surface, text_rect)
         else:
             # Fallback graphic if Go engine isn't running or streaming yet
             pygame.draw.circle(screen, (100, 100, 100), (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2), 15)
