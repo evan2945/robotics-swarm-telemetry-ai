@@ -207,7 +207,7 @@ func TestGossipRouting(t *testing.T) {
 				Inbox:         make(chan machine.GossipPacket, 10),
 				Outbox:        make(chan machine.GossipPacket, 10),
 				SeenPackets:   make(map[string]bool),
-				KnownStations: make(map[string]machine.StationData),
+				KnownStations: make(map[string]*machine.StationData),
 			}
 			mockMachineB := &machine.MachineState{
 				ID:             "machine-02",
@@ -230,7 +230,7 @@ func TestGossipRouting(t *testing.T) {
 				Inbox:         make(chan machine.GossipPacket, 10),
 				Outbox:        make(chan machine.GossipPacket, 10),
 				SeenPackets:   make(map[string]bool),
-				KnownStations: make(map[string]machine.StationData),
+				KnownStations: make(map[string]*machine.StationData),
 			}
 			mockMachineC := &machine.MachineState{
 				ID:             "machine-03",
@@ -253,7 +253,7 @@ func TestGossipRouting(t *testing.T) {
 				Inbox:         make(chan machine.GossipPacket, 10),
 				Outbox:        make(chan machine.GossipPacket, 10),
 				SeenPackets:   make(map[string]bool),
-				KnownStations: make(map[string]machine.StationData),
+				KnownStations: make(map[string]*machine.StationData),
 			}
 			mockMachineA.Outbox <- tc.packet
 
@@ -360,7 +360,7 @@ func TestGossipRouting_BeaconBroadcast(t *testing.T) {
 				Inbox:       make(chan machine.GossipPacket, 10),
 				Outbox:      make(chan machine.GossipPacket, 10),
 				SeenPackets: make(map[string]bool),
-				KnownStations: map[string]machine.StationData{
+				KnownStations: map[string]*machine.StationData{
 					tc.packet.ID: {
 						DiscoveredAt: time.Now(),
 						X:            142,
@@ -389,7 +389,7 @@ func TestGossipRouting_BeaconBroadcast(t *testing.T) {
 				Inbox:         make(chan machine.GossipPacket, 10),
 				Outbox:        make(chan machine.GossipPacket, 10),
 				SeenPackets:   make(map[string]bool),
-				KnownStations: make(map[string]machine.StationData),
+				KnownStations: make(map[string]*machine.StationData),
 			}
 
 			engine := NewEngine([]*machine.MachineState{mockMachineA, mockMachineB}, tc.secondsSinceLastBroadcast)

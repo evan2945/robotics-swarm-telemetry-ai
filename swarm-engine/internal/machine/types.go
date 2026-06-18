@@ -3,9 +3,12 @@ package machine
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 )
+
+const StationMemoryTTL = 10 * time.Second
 
 // BatteryBlueprint defines power characteristics for a machine class.
 type BatteryBlueprint struct {
@@ -86,28 +89,28 @@ type MachineState struct {
 	mu             sync.Mutex
 	Inbox          chan GossipPacket
 	Outbox         chan GossipPacket
-	ID             string                 `json:"id"`
-	Name           string                 `json:"name"`
-	State          string                 `json:"state"`
-	X              float64                `json:"x"`
-	Y              float64                `json:"y"`
-	TargetX        float64                `json:"target_x"`
-	TargetY        float64                `json:"target_y"`
-	Vx             float64                `json:"v_x"`
-	Vy             float64                `json:"v_y"`
-	BatteryLevel   float64                `json:"battery_level"`
-	Blueprint      MachineBlueprint       `json:"blueprint"`
-	TickerInterval time.Duration          `json:"ticker_interval"`
-	SeenPackets    map[string]bool        `json:"seen_packets"`
-	Env            Environment            `json:"environment"`
-	KnownStations  map[string]StationData `json:"known_stations"`
+	ID             string                  `json:"id"`
+	Name           string                  `json:"name"`
+	State          string                  `json:"state"`
+	X              float64                 `json:"x"`
+	Y              float64                 `json:"y"`
+	TargetX        float64                 `json:"target_x"`
+	TargetY        float64                 `json:"target_y"`
+	Vx             float64                 `json:"v_x"`
+	Vy             float64                 `json:"v_y"`
+	BatteryLevel   float64                 `json:"battery_level"`
+	Blueprint      MachineBlueprint        `json:"blueprint"`
+	TickerInterval time.Duration           `json:"ticker_interval"`
+	SeenPackets    map[string]bool         `json:"seen_packets"`
+	Env            Environment             `json:"environment"`
+	KnownStations  map[string]*StationData `json:"known_stations"`
 }
 
 type WorldItem struct {
-	ID   string  `json:"id"`
-	Type string  `json:"type"`
-	X    float64 `json:"x"`
-	Y    float64 `json:"y"`
+	ID   string       `json:"id"`
+	Type ResourceType `json:"type"`
+	X    float64      `json:"x"`
+	Y    float64      `json:"y"`
 }
 
 type Environment interface {
@@ -125,8 +128,39 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 		case <-ticker.C:
 			battery_level := m.GetBatteryLevel()
 			blueprint := m.GetBlueprint()
-			m.SetBatteryLevel(battery_level - blueprint.Battery.DrainRate)
-			fmt.Printf("Machine %s battery: %f\n", m.GetName(), m.GetBatteryLevel())
+			battery_drain_level := blueprint.Battery.DrainRate
+			if battery_level <= 20 && m.GetState() == "PATROL" {
+				fmt.Printf("[%s] WARNING: Battery critically low (%f%%). Entering LOW_POWER mode.\n", m.GetName(), m.GetBatteryLevel())
+				m.SetState("LOW_POWER")
+				battery_drain_level = blueprint.Battery.LowPowerDrain
+			}
+
+			isAtChargingStation := false
+			if m.GetState() == "LOW_POWER" {
+				knownStations := m.GetKnownStations()
+				mX, mY := m.GetPosition()
+
+				for _, stationData := range knownStations {
+					distToStation := math.Sqrt(math.Pow((stationData.X-mX), 2) + math.Pow((stationData.Y-mY), 2))
+					if distToStation <= 5.0 {
+						isAtChargingStation = true
+						break
+					}
+				}
+			}
+			if isAtChargingStation {
+				m.SetBatteryLevel(battery_level + blueprint.Battery.ChargeRate)
+			} else {
+				m.SetBatteryLevel(battery_level - battery_drain_level)
+			}
+
+			battery_level = m.GetBatteryLevel()
+			fmt.Printf("Machine %s battery: %f\n", m.GetName(), battery_level)
+
+			if m.GetState() == "LOW_POWER" && battery_level >= 100 {
+				m.SetBatteryLevel(100.0)
+				m.SetState("PATROL")
+			}
 
 			seenItems := []WorldItem{}
 			if m.Env != nil {
@@ -137,9 +171,21 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 			for _, item := range seenItems {
 				now := time.Now()
 				if _, ok := knownStations[item.ID]; !ok {
+					fmt.Printf("[%s] has seen world item %s!\n", m.GetName(), item.Type)
 					m.AddToKnownStations(item)
 					m.Outbox <- GossipPacket{
-						ID: fmt.Sprintf("%s:%s:%s", item.ID, m.GetId(), now),
+						ID:       fmt.Sprintf("%s:%s:%s", m.ID, item.ID, time.Now()),
+						OriginId: m.ID,
+						Payload: PacketPayload{
+							Type: PayloadResource,
+							Resource: &ResourceData{
+								ID:   item.ID,
+								Type: item.Type,
+								X:    item.X,
+								Y:    item.Y,
+							},
+						},
+						TTL: 2,
 					}
 				} else {
 					m.UpdateKnownStationsTime(item.ID, now)
@@ -147,8 +193,6 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 			}
 
 		case packet := <-m.Inbox:
-			fmt.Printf("[%s] Received Gossip Packet: %s from %s\n", m.GetName(), packet.ID, packet.OriginId)
-
 			if !m.HasSeenPacket(packet.ID) {
 				m.AddSeenPacket(packet.ID)
 
@@ -156,9 +200,10 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 					knownStations := m.GetKnownStations()
 					resource := packet.Payload.Resource
 					if _, ok := knownStations[resource.ID]; !ok {
+						fmt.Printf("[%s] Received Gossip Packet: Saw %s from %s\n", m.GetName(), packet.Payload.Resource.Type, packet.OriginId)
 						m.AddToKnownStations(WorldItem{
 							ID:   resource.ID,
-							Type: string(resource.Type),
+							Type: resource.Type,
 							X:    resource.X,
 							Y:    resource.Y,
 						})
@@ -302,13 +347,14 @@ func (m *MachineState) QueuePacketToSend(packet GossipPacket) {
 	m.Outbox <- packet
 }
 
-func (m *MachineState) GetKnownStations() map[string]StationData {
+func (m *MachineState) GetKnownStations() map[string]*StationData {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Janitor phase
 	for id, data := range m.KnownStations {
-		if time.Since(data.DiscoveredAt) > 10*time.Second {
+		if time.Since(data.DiscoveredAt) > StationMemoryTTL {
+			fmt.Printf("[%s] Station has expired out of memory.\n", m.Name)
 			delete(m.KnownStations, id)
 		}
 	}
@@ -320,7 +366,7 @@ func (m *MachineState) AddToKnownStations(item WorldItem) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.KnownStations[item.ID] = StationData{
+	m.KnownStations[item.ID] = &StationData{
 		DiscoveredAt: time.Now(),
 		X:            item.X,
 		Y:            item.Y,
@@ -333,6 +379,8 @@ func (m *MachineState) UpdateKnownStationsTime(id string, t time.Time) {
 
 	station := m.KnownStations[id]
 	station.DiscoveredAt = t
+
+	m.KnownStations[id] = station
 }
 
 func (m *MachineState) GetActiveBeacons() []GossipPacket {
@@ -341,7 +389,7 @@ func (m *MachineState) GetActiveBeacons() []GossipPacket {
 
 	var packets []GossipPacket
 	for stationId, stationData := range m.KnownStations {
-		if time.Since(stationData.DiscoveredAt) < 10*time.Second {
+		if time.Since(stationData.DiscoveredAt) < StationMemoryTTL {
 			packets = append(packets, GossipPacket{
 				ID:       fmt.Sprintf("%s:%s:%s", m.ID, stationId, stationData.DiscoveredAt),
 				OriginId: m.ID,
