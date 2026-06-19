@@ -36,6 +36,10 @@ func (m *MockEnvironment) GetVisibleItems(x, y, visionRange float64) []WorldItem
 	return m.ItemsToReturn
 }
 
+func (m *MockEnvironment) GetVisibleMachines(machineId string, x, y, visionRange float64) []*MachineState {
+	return []*MachineState{}
+}
+
 func TestRunLifecycle(t *testing.T) {
 	mockMachine := &MachineState{
 		ID:             "machine-01",

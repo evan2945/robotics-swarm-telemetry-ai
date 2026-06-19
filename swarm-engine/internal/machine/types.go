@@ -58,13 +58,21 @@ type GossipPacket struct {
 type PayloadType string
 
 const (
-	PayloadResource PayloadType = "RESOURCE"
+	PayloadResource  PayloadType = "RESOURCE"
+	PayloadHeartbeat PayloadType = "HEARTBEAT"
 )
 
 type ResourceType string
 
 const (
 	ResourceStation ResourceType = "STATION"
+)
+
+type HeartbeatType string
+
+const (
+	HeartbeatRequest  HeartbeatType = "HEARTBEAT REQUEST"
+	HeartbeatResponse HeartbeatType = "HEARTBEAT RESPONSE"
 )
 
 type ResourceData struct {
@@ -74,9 +82,18 @@ type ResourceData struct {
 	Y    float64      `json:"y"`
 }
 
+type HeartbeatData struct {
+	ID           string        `json:"id"`
+	Type         HeartbeatType `json:"type"`
+	X            float64       `json:"x"`
+	Y            float64       `json:"y"`
+	BatteryLevel float64       `json:"battery_level"`
+}
+
 type PacketPayload struct {
-	Type     PayloadType   `json:"type"`
-	Resource *ResourceData `json:"resource,omitempty"`
+	Type      PayloadType    `json:"type"`
+	Resource  *ResourceData  `json:"resource,omitempty"`
+	Heartbeat *HeartbeatData `json:"heartbeat,omitempty"`
 }
 
 type StationData struct {
@@ -85,25 +102,33 @@ type StationData struct {
 	Y            float64   `json:"y"`
 }
 
+type PendingPing struct {
+	LastPingedAt  time.Time `json:"last_pinged_at"`
+	LastKnownX    float64   `json:"last_known_x"`
+	LastKnownY    float64   `json:"last_known_y"`
+	HeardResponse bool      `json:"heard_response"`
+}
+
 type MachineState struct {
-	mu             sync.Mutex
-	Inbox          chan GossipPacket
-	Outbox         chan GossipPacket
-	ID             string                  `json:"id"`
-	Name           string                  `json:"name"`
-	State          string                  `json:"state"`
-	X              float64                 `json:"x"`
-	Y              float64                 `json:"y"`
-	TargetX        float64                 `json:"target_x"`
-	TargetY        float64                 `json:"target_y"`
-	Vx             float64                 `json:"v_x"`
-	Vy             float64                 `json:"v_y"`
-	BatteryLevel   float64                 `json:"battery_level"`
-	Blueprint      MachineBlueprint        `json:"blueprint"`
-	TickerInterval time.Duration           `json:"ticker_interval"`
-	SeenPackets    map[string]bool         `json:"seen_packets"`
-	Env            Environment             `json:"environment"`
-	KnownStations  map[string]*StationData `json:"known_stations"`
+	mu                sync.Mutex
+	Inbox             chan GossipPacket
+	Outbox            chan GossipPacket
+	ID                string                  `json:"id"`
+	Name              string                  `json:"name"`
+	State             string                  `json:"state"`
+	X                 float64                 `json:"x"`
+	Y                 float64                 `json:"y"`
+	TargetX           float64                 `json:"target_x"`
+	TargetY           float64                 `json:"target_y"`
+	Vx                float64                 `json:"v_x"`
+	Vy                float64                 `json:"v_y"`
+	BatteryLevel      float64                 `json:"battery_level"`
+	Blueprint         MachineBlueprint        `json:"blueprint"`
+	TickerInterval    time.Duration           `json:"ticker_interval"`
+	SeenPackets       map[string]bool         `json:"seen_packets"`
+	Env               Environment             `json:"environment"`
+	KnownStations     map[string]*StationData `json:"known_stations"`
+	PendingHeartbeats map[string]PendingPing  `json:"pending_heartbeats"`
 }
 
 type WorldItem struct {
@@ -114,7 +139,8 @@ type WorldItem struct {
 }
 
 type Environment interface {
-	GetVisibleItems(x, y float64, visionRange float64) []WorldItem
+	GetVisibleItems(x, y, visionRange float64) []WorldItem
+	GetVisibleMachines(machineId string, x, y, visionRange float64) []*MachineState
 }
 
 func (m *MachineState) RunLifecycle(ctx context.Context) {
@@ -128,6 +154,7 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 		case <-ticker.C:
 			battery_level := m.GetBatteryLevel()
 			blueprint := m.GetBlueprint()
+			mX, mY := m.GetPosition()
 			battery_drain_level := blueprint.Battery.DrainRate
 			if battery_level <= 20 && m.GetState() == "PATROL" {
 				fmt.Printf("[%s] WARNING: Battery critically low (%f%%). Entering LOW_POWER mode.\n", m.GetName(), m.GetBatteryLevel())
@@ -138,7 +165,7 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 			isAtChargingStation := false
 			if m.GetState() == "LOW_POWER" {
 				knownStations := m.GetKnownStations()
-				mX, mY := m.GetPosition()
+				// mX, mY := m.GetPosition()
 
 				for _, stationData := range knownStations {
 					distToStation := math.Sqrt(math.Pow((stationData.X-mX), 2) + math.Pow((stationData.Y-mY), 2))
@@ -174,7 +201,7 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 					fmt.Printf("[%s] has seen world item %s!\n", m.GetName(), item.Type)
 					m.AddToKnownStations(item)
 					m.Outbox <- GossipPacket{
-						ID:       fmt.Sprintf("%s:%s:%s", m.ID, item.ID, time.Now()),
+						ID:       fmt.Sprintf("%s:%s:%s", m.GetId(), item.ID, time.Now()),
 						OriginId: m.ID,
 						Payload: PacketPayload{
 							Type: PayloadResource,
@@ -189,6 +216,39 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 					}
 				} else {
 					m.UpdateKnownStationsTime(item.ID, now)
+				}
+			}
+
+			seenMachines := []*MachineState{}
+			if m.Env != nil {
+				seenMachines = m.Env.GetVisibleMachines(m.ID, m.X, m.Y, blueprint.Vision.Range)
+			}
+
+			for _, targetMachine := range seenMachines {
+				if _, ok := m.GetPendingHeartbeats()[targetMachine.ID]; !ok {
+					heartbeatRequest := PendingPing{
+						LastPingedAt:  time.Now(),
+						LastKnownX:    mX,
+						LastKnownY:    mY,
+						HeardResponse: false,
+					}
+					m.SetPendingHeartbeat(targetMachine.ID, heartbeatRequest)
+					mId := m.GetId()
+					m.Outbox <- GossipPacket{
+						ID:       fmt.Sprintf("%s:%s:%s", mId, targetMachine.GetId(), time.Now()),
+						OriginId: mId,
+						Payload: PacketPayload{
+							Type: PayloadHeartbeat,
+							Heartbeat: &HeartbeatData{
+								ID:           mId,
+								Type:         HeartbeatRequest,
+								X:            mX,
+								Y:            mY,
+								BatteryLevel: battery_level,
+							},
+						},
+						TTL: 1,
+					}
 				}
 			}
 
@@ -408,4 +468,18 @@ func (m *MachineState) GetActiveBeacons() []GossipPacket {
 	}
 
 	return packets
+}
+
+func (m *MachineState) GetPendingHeartbeats() map[string]PendingPing {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.PendingHeartbeats
+}
+
+func (m *MachineState) SetPendingHeartbeat(targetMachineId string, pendingHeartbeat PendingPing) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.PendingHeartbeats[targetMachineId] = pendingHeartbeat
 }
