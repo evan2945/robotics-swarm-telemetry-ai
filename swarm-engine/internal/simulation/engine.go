@@ -2,7 +2,6 @@ package simulation
 
 import (
 	"math"
-	"math/rand"
 	"swarm-engine/internal/machine"
 	"time"
 )
@@ -45,73 +44,16 @@ func (e *Engine) Tick(dt float64) {
 		if m.GetBatteryLevel() <= 0 {
 			continue
 		}
-		mVx, mVy := m.GetHeading()
-		mX, mY := m.GetPosition()
-		mTargetX, mTargetY := m.GetTarget()
-		locBlueprint := m.GetBlueprint().Locomotion
+
 		mState := m.GetState()
-		mSpeed := locBlueprint.Speed
 
-		if mState == "LOW_POWER" {
-			mSpeed = locBlueprint.LowPowerSpeed
-
-			if getEuclDistance(mX, mY, mTargetX, mTargetY) > 5.0 {
-				// If the machine is in low power mode, it needs to head to
-				// the closest charging station.
-				knownStations := m.GetKnownStations()
-				if len(knownStations) > 0 {
-					dist := -1.0
-					var targetStation *machine.StationData
-					for _, station := range knownStations {
-						newDist := getEuclDistance(mX, mY, station.X, station.Y)
-						if dist == -1 || newDist < dist {
-							dist = newDist
-							targetStation = station
-						}
-					}
-
-					m.SetTarget(targetStation.X, targetStation.Y)
-					mTargetX, mTargetY = targetStation.X, targetStation.Y
-				}
-			}
+		if action, exists := machine.KinematicRegistry[mState]; exists {
+			action(m, machine.KinematicActionParams{
+				Dt:           dt,
+				ScreenWidth:  e.Width,
+				ScreenHeight: e.Height,
+			})
 		}
-
-		mVx, mVy = machine.CalculateHeading(mX, mY, mTargetX, mTargetY, mSpeed)
-		mX = mX + (mVx * dt)
-		mY = mY + (mVy * dt)
-
-		if mX <= 0 {
-			mX = 0
-			mVx = -mVx
-			mTargetX = -mTargetX
-		} else if mX >= e.Width {
-			mX = e.Width
-			mVx = -mVx
-			mTargetX = e.Width - (mTargetX - e.Width)
-		}
-
-		if mY <= 0 {
-			mY = 0
-			mVy = -mVy
-			mTargetY = -mTargetY
-		} else if mY >= e.Height {
-			mY = e.Height
-			mVy = -mVy
-			mTargetY = e.Height - (mTargetY - e.Height)
-		}
-
-		distance := getEuclDistance(mX, mY, mTargetX, mTargetY)
-
-		if mState != "LOW_POWER" {
-			if distance < 5.0 {
-				m.SetTarget(rand.Float64()*e.Width, rand.Float64()*e.Height)
-			} else {
-				m.SetTarget(mTargetX, mTargetY)
-			}
-		}
-
-		m.SetPosition(mX, mY)
-		m.SetHeading(mVx, mVy)
 
 	DrainingOutbox:
 		for {
