@@ -186,16 +186,21 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 					}
 				}
 			}
-			if isAtChargingStation {
+			// Charge battery if we just got to the charging station, or if already there and currently charging.
+			if isAtChargingStation || m.GetState() == "CHARGING" {
+				// If we are at the charging station and in LOW_POWER mode, switch to charging mode.
+				if m.GetState() != "CHARGING" {
+					m.SetState("CHARGING")
+				}
 				m.SetBatteryLevel(battery_level + blueprint.Battery.ChargeRate)
 			} else {
 				m.SetBatteryLevel(battery_level - battery_drain_level)
 			}
 
 			battery_level = m.GetBatteryLevel()
-			// fmt.Printf("Machine %s battery: %f\n", m.GetName(), battery_level)
+			fmt.Printf("Machine %s battery: %f\n", m.GetName(), battery_level)
 
-			if m.GetState() == "LOW_POWER" && battery_level >= 100 {
+			if m.GetState() == "CHARGING" && battery_level >= 100 {
 				m.SetBatteryLevel(100.0)
 				m.SetState("PATROL")
 			}

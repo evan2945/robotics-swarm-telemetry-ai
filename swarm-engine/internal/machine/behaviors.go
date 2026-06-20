@@ -7,6 +7,7 @@ type KinematicAction func(params KinematicActionParams)
 var KinematicRegistry = map[string]func(m *MachineState, params KinematicActionParams){
 	"PATROL":    (*MachineState).HandlePatrolKinematics,
 	"LOW_POWER": (*MachineState).HandleLowPowerKinematics,
+	"CHARGING":  (*MachineState).HandleChargingKinematics,
 }
 
 type KinematicActionParams struct {
@@ -17,18 +18,22 @@ type KinematicActionParams struct {
 
 func (m *MachineState) HandlePatrolKinematics(params KinematicActionParams) {
 	blueprint := m.GetBlueprint().Locomotion
+
+	mX, mY := m.GetPosition()
+	mTargetX, mTargetY := m.GetTarget()
+
+	if getEuclDistance(mX, mY, mTargetX, mTargetY) < 5.0 {
+		mTargetX = rand.Float64() * params.ScreenWidth
+		mTargetY = rand.Float64() * params.ScreenHeight
+		m.SetTarget(mTargetX, mTargetY)
+	}
+
 	resp := m.ExecuteMovement(MovementParams{
 		kap:    params,
 		mSpeed: blueprint.Speed,
 	})
 
-	distance := getEuclDistance(resp.mX, resp.mY, resp.mTargetX, resp.mTargetY)
-	if distance < 5.0 {
-		m.SetTarget(rand.Float64()*params.ScreenWidth, rand.Float64()*params.ScreenHeight)
-	} else {
-		m.SetTarget(resp.mTargetX, resp.mTargetY)
-	}
-
+	m.SetTarget(resp.mTargetX, resp.mTargetY)
 	m.SetPosition(resp.mX, resp.mY)
 	m.SetHeading(resp.mVx, resp.mVy)
 }
@@ -74,6 +79,14 @@ func (m *MachineState) HandleLowPowerKinematics(params KinematicActionParams) {
 
 	m.SetPosition(resp.mX, resp.mY)
 	m.SetHeading(resp.mVx, resp.mVy)
+}
+
+func (m *MachineState) HandleChargingKinematics(params KinematicActionParams) {
+	m.SetHeading(0.0, 0.0)
+
+	// Explicitly setting position to previous location to prevent minor drift
+	mX, mY := m.GetPosition()
+	m.SetPosition(mX, mY)
 }
 
 type MovementParams struct {
