@@ -159,20 +159,21 @@ func createMachine(numOfMachines int, name string, specs machine.MachineBlueprin
 			return createdMachines
 		} else {
 			machine := &machine.MachineState{
-				ID:             fmt.Sprintf("%s-%d", name, machineNum),
-				Name:           name,
-				X:              rand.Float64() * canvasWidth,
-				Y:              rand.Float64() * canvasHeight,
-				TargetX:        rand.Float64() * canvasWidth,
-				TargetY:        rand.Float64() * canvasHeight,
-				BatteryLevel:   specs.Battery.InitialLevel,
-				TickerInterval: time.Second,
-				Blueprint:      specs,
-				State:          "PATROL",
-				Inbox:          make(chan machine.GossipPacket, 20),
-				Outbox:         make(chan machine.GossipPacket, 20),
-				SeenPackets:    make(map[string]bool),
-				KnownStations:  make(map[string]*machine.StationData),
+				ID:                fmt.Sprintf("%s-%d", name, machineNum),
+				Name:              name,
+				X:                 rand.Float64() * canvasWidth,
+				Y:                 rand.Float64() * canvasHeight,
+				TargetX:           rand.Float64() * canvasWidth,
+				TargetY:           rand.Float64() * canvasHeight,
+				BatteryLevel:      specs.Battery.InitialLevel,
+				TickerInterval:    time.Second,
+				Blueprint:         specs,
+				State:             "PATROL",
+				Inbox:             make(chan machine.GossipPacket, 20),
+				Outbox:            make(chan machine.GossipPacket, 20),
+				SeenPackets:       make(map[string]bool),
+				KnownStations:     make(map[string]*machine.StationData),
+				PendingHeartbeats: make(map[string]machine.PendingPing),
 			}
 
 			createdMachines = append(createdMachines, machine)

@@ -42,6 +42,9 @@ func (e *Engine) Tick(dt float64) {
 	}
 
 	for _, m := range e.Machines {
+		if m.GetBatteryLevel() <= 0 {
+			continue
+		}
 		mVx, mVy := m.GetHeading()
 		mX, mY := m.GetPosition()
 		mTargetX, mTargetY := m.GetTarget()
@@ -68,6 +71,7 @@ func (e *Engine) Tick(dt float64) {
 					}
 
 					m.SetTarget(targetStation.X, targetStation.Y)
+					mTargetX, mTargetY = targetStation.X, targetStation.Y
 				}
 			}
 		}
@@ -175,6 +179,24 @@ func (e *Engine) GetVisibleItems(x, y, visionRange float64) []machine.WorldItem 
 	}
 
 	return visibleItems
+}
+
+// Similar to the above method, this will be called to see if other machiens are within visual range.
+func (e *Engine) GetVisibleMachines(machineId string, x, y, visionRange float64) []*machine.MachineState {
+	visiblePeers := []*machine.MachineState{}
+
+	for _, peer := range e.Machines {
+		if peer.ID == machineId {
+			continue
+		}
+
+		pX, pY := peer.GetPosition()
+		if getEuclDistance(x, y, pX, pY) <= visionRange {
+			visiblePeers = append(visiblePeers, peer)
+		}
+	}
+
+	return visiblePeers
 }
 
 func getEuclDistance(x1, y1, x2, y2 float64) float64 {

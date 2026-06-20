@@ -9,6 +9,7 @@ import (
 )
 
 const StationMemoryTTL = 10 * time.Second
+const HeartbeatMemoryTTL = 4 * time.Second
 
 // BatteryBlueprint defines power characteristics for a machine class.
 type BatteryBlueprint struct {
@@ -58,13 +59,21 @@ type GossipPacket struct {
 type PayloadType string
 
 const (
-	PayloadResource PayloadType = "RESOURCE"
+	PayloadResource  PayloadType = "RESOURCE"
+	PayloadHeartbeat PayloadType = "HEARTBEAT"
 )
 
 type ResourceType string
 
 const (
 	ResourceStation ResourceType = "STATION"
+)
+
+type HeartbeatType string
+
+const (
+	HeartbeatRequest  HeartbeatType = "HEARTBEAT REQUEST"
+	HeartbeatResponse HeartbeatType = "HEARTBEAT RESPONSE"
 )
 
 type ResourceData struct {
@@ -74,9 +83,18 @@ type ResourceData struct {
 	Y    float64      `json:"y"`
 }
 
+type HeartbeatData struct {
+	ID           string        `json:"id"`
+	Type         HeartbeatType `json:"type"`
+	X            float64       `json:"x"`
+	Y            float64       `json:"y"`
+	BatteryLevel float64       `json:"battery_level"`
+}
+
 type PacketPayload struct {
-	Type     PayloadType   `json:"type"`
-	Resource *ResourceData `json:"resource,omitempty"`
+	Type      PayloadType    `json:"type"`
+	Resource  *ResourceData  `json:"resource,omitempty"`
+	Heartbeat *HeartbeatData `json:"heartbeat,omitempty"`
 }
 
 type StationData struct {
@@ -85,25 +103,33 @@ type StationData struct {
 	Y            float64   `json:"y"`
 }
 
+type PendingPing struct {
+	LastPingedAt  time.Time `json:"last_pinged_at"`
+	LastKnownX    float64   `json:"last_known_x"`
+	LastKnownY    float64   `json:"last_known_y"`
+	HeardResponse bool      `json:"heard_response"`
+}
+
 type MachineState struct {
-	mu             sync.Mutex
-	Inbox          chan GossipPacket
-	Outbox         chan GossipPacket
-	ID             string                  `json:"id"`
-	Name           string                  `json:"name"`
-	State          string                  `json:"state"`
-	X              float64                 `json:"x"`
-	Y              float64                 `json:"y"`
-	TargetX        float64                 `json:"target_x"`
-	TargetY        float64                 `json:"target_y"`
-	Vx             float64                 `json:"v_x"`
-	Vy             float64                 `json:"v_y"`
-	BatteryLevel   float64                 `json:"battery_level"`
-	Blueprint      MachineBlueprint        `json:"blueprint"`
-	TickerInterval time.Duration           `json:"ticker_interval"`
-	SeenPackets    map[string]bool         `json:"seen_packets"`
-	Env            Environment             `json:"environment"`
-	KnownStations  map[string]*StationData `json:"known_stations"`
+	mu                sync.Mutex
+	Inbox             chan GossipPacket
+	Outbox            chan GossipPacket
+	ID                string                  `json:"id"`
+	Name              string                  `json:"name"`
+	State             string                  `json:"state"`
+	X                 float64                 `json:"x"`
+	Y                 float64                 `json:"y"`
+	TargetX           float64                 `json:"target_x"`
+	TargetY           float64                 `json:"target_y"`
+	Vx                float64                 `json:"v_x"`
+	Vy                float64                 `json:"v_y"`
+	BatteryLevel      float64                 `json:"battery_level"`
+	Blueprint         MachineBlueprint        `json:"blueprint"`
+	TickerInterval    time.Duration           `json:"ticker_interval"`
+	SeenPackets       map[string]bool         `json:"seen_packets"`
+	Env               Environment             `json:"environment"`
+	KnownStations     map[string]*StationData `json:"known_stations"`
+	PendingHeartbeats map[string]PendingPing  `json:"pending_heartbeats"`
 }
 
 type WorldItem struct {
@@ -114,7 +140,8 @@ type WorldItem struct {
 }
 
 type Environment interface {
-	GetVisibleItems(x, y float64, visionRange float64) []WorldItem
+	GetVisibleItems(x, y, visionRange float64) []WorldItem
+	GetVisibleMachines(machineId string, x, y, visionRange float64) []*MachineState
 }
 
 func (m *MachineState) RunLifecycle(ctx context.Context) {
@@ -127,7 +154,18 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 
 		case <-ticker.C:
 			battery_level := m.GetBatteryLevel()
+
+			if battery_level <= 0 {
+				if m.GetState() != "DEAD" {
+					fmt.Printf("[%s] 💀 CRITICAL: Battery fully depleted. Unit deactivated.\n", m.GetName())
+					m.SetBatteryLevel(0.0)
+					m.SetState("DEAD")
+				}
+				continue
+			}
+
 			blueprint := m.GetBlueprint()
+			mX, mY := m.GetPosition()
 			battery_drain_level := blueprint.Battery.DrainRate
 			if battery_level <= 20 && m.GetState() == "PATROL" {
 				fmt.Printf("[%s] WARNING: Battery critically low (%f%%). Entering LOW_POWER mode.\n", m.GetName(), m.GetBatteryLevel())
@@ -138,7 +176,6 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 			isAtChargingStation := false
 			if m.GetState() == "LOW_POWER" {
 				knownStations := m.GetKnownStations()
-				mX, mY := m.GetPosition()
 
 				for _, stationData := range knownStations {
 					distToStation := math.Sqrt(math.Pow((stationData.X-mX), 2) + math.Pow((stationData.Y-mY), 2))
@@ -174,7 +211,7 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 					fmt.Printf("[%s] has seen world item %s!\n", m.GetName(), item.Type)
 					m.AddToKnownStations(item)
 					m.Outbox <- GossipPacket{
-						ID:       fmt.Sprintf("%s:%s:%s", m.ID, item.ID, time.Now()),
+						ID:       fmt.Sprintf("%s:%s:%s", m.GetId(), item.ID, time.Now()),
 						OriginId: m.ID,
 						Payload: PacketPayload{
 							Type: PayloadResource,
@@ -192,21 +229,93 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 				}
 			}
 
+			seenMachines := []*MachineState{}
+			if m.Env != nil {
+				seenMachines = m.Env.GetVisibleMachines(m.ID, m.X, m.Y, blueprint.Vision.Range)
+			}
+
+			for _, targetMachine := range seenMachines {
+				if _, ok := m.GetPendingHeartbeats()[targetMachine.ID]; !ok {
+					heartbeatRequest := PendingPing{
+						LastPingedAt:  time.Now(),
+						LastKnownX:    mX,
+						LastKnownY:    mY,
+						HeardResponse: false,
+					}
+					m.SetPendingHeartbeat(targetMachine.ID, heartbeatRequest)
+					mId := m.GetId()
+					fmt.Printf("[%s] Sending heartbeat request for peer: %s\n", m.GetName(), targetMachine.GetId())
+					m.Outbox <- GossipPacket{
+						ID:       fmt.Sprintf("%s:%s:%s", mId, targetMachine.GetId(), time.Now()),
+						OriginId: mId,
+						Payload: PacketPayload{
+							Type: PayloadHeartbeat,
+							Heartbeat: &HeartbeatData{
+								ID:           mId,
+								Type:         HeartbeatRequest,
+								X:            mX,
+								Y:            mY,
+								BatteryLevel: battery_level,
+							},
+						},
+						TTL: 1,
+					}
+				}
+			}
+
+			m.GcPendingHeartbeats()
+
 		case packet := <-m.Inbox:
 			if !m.HasSeenPacket(packet.ID) {
 				m.AddSeenPacket(packet.ID)
 
-				if packet.Payload.Resource.Type == ResourceStation {
-					knownStations := m.GetKnownStations()
-					resource := packet.Payload.Resource
-					if _, ok := knownStations[resource.ID]; !ok {
-						fmt.Printf("[%s] Received Gossip Packet: Saw %s from %s\n", m.GetName(), packet.Payload.Resource.Type, packet.OriginId)
-						m.AddToKnownStations(WorldItem{
-							ID:   resource.ID,
-							Type: resource.Type,
-							X:    resource.X,
-							Y:    resource.Y,
-						})
+				switch packet.Payload.Type {
+				case PayloadResource:
+					if packet.Payload.Resource != nil && packet.Payload.Resource.Type == ResourceStation {
+						knownStations := m.GetKnownStations()
+						resource := packet.Payload.Resource
+						if _, ok := knownStations[resource.ID]; !ok {
+							fmt.Printf("[%s] Received Gossip Packet: Saw %s from %s\n", m.GetName(), packet.Payload.Resource.Type, packet.OriginId)
+							m.AddToKnownStations(WorldItem{
+								ID:   resource.ID,
+								Type: resource.Type,
+								X:    resource.X,
+								Y:    resource.Y,
+							})
+						}
+					}
+				case PayloadHeartbeat:
+					if packet.Payload.Heartbeat != nil {
+						heartbeat := packet.Payload.Heartbeat
+						mId := m.GetId()
+						mX, mY := m.GetPosition()
+						batteryLevel := m.GetBatteryLevel()
+
+						switch heartbeat.Type {
+						// Another machine saw this machine, and is requesting a heartbeat response
+						case HeartbeatRequest:
+							fmt.Printf("[%s] Heartbeat request receieved from peer: %s\n", m.Name, packet.OriginId)
+							m.Outbox <- GossipPacket{
+								ID:       fmt.Sprintf("%s:%s:%s", mId, packet.OriginId, time.Now()),
+								OriginId: mId,
+								Payload: PacketPayload{
+									Type: PayloadHeartbeat,
+									Heartbeat: &HeartbeatData{
+										ID:           mId,
+										Type:         HeartbeatResponse,
+										X:            mX,
+										Y:            mY,
+										BatteryLevel: batteryLevel,
+									},
+								},
+								TTL: 1,
+							}
+						// We are getting back a heartbeat response, so just update the pending request to indicate
+						// that we heard back from the machine.
+						case HeartbeatResponse:
+							m.UpdatePendingHeartbeat(packet.OriginId, true)
+							fmt.Printf("[%s] Heartbeat confirmed for peer: %s\n", m.Name, packet.OriginId)
+						}
 					}
 				}
 				packet.TTL -= 1
@@ -408,4 +517,42 @@ func (m *MachineState) GetActiveBeacons() []GossipPacket {
 	}
 
 	return packets
+}
+
+func (m *MachineState) GetPendingHeartbeats() map[string]PendingPing {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.PendingHeartbeats
+}
+
+func (m *MachineState) SetPendingHeartbeat(targetMachineId string, pendingHeartbeat PendingPing) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.PendingHeartbeats[targetMachineId] = pendingHeartbeat
+}
+
+func (m *MachineState) UpdatePendingHeartbeat(targetMachineId string, heardResponse bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if ping, ok := m.PendingHeartbeats[targetMachineId]; ok {
+		ping.HeardResponse = heardResponse
+		m.PendingHeartbeats[targetMachineId] = ping
+	}
+}
+
+func (m *MachineState) GcPendingHeartbeats() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Janitor phase
+	for id, ping := range m.PendingHeartbeats {
+		if time.Since(ping.LastPingedAt) > HeartbeatMemoryTTL {
+			fmt.Printf("[%s] Heartbeat has expired out of memory for %s.\nResponded? %t\n", m.Name, id, ping.HeardResponse)
+			delete(m.PendingHeartbeats, id)
+		}
+	}
+
 }
