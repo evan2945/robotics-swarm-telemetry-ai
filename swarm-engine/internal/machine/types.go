@@ -9,6 +9,7 @@ import (
 )
 
 const StationMemoryTTL = 10 * time.Second
+const HeartbeatMemoryTTL = 4 * time.Second
 
 // BatteryBlueprint defines power characteristics for a machine class.
 type BatteryBlueprint struct {
@@ -165,7 +166,6 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 			isAtChargingStation := false
 			if m.GetState() == "LOW_POWER" {
 				knownStations := m.GetKnownStations()
-				// mX, mY := m.GetPosition()
 
 				for _, stationData := range knownStations {
 					distToStation := math.Sqrt(math.Pow((stationData.X-mX), 2) + math.Pow((stationData.Y-mY), 2))
@@ -234,6 +234,7 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 					}
 					m.SetPendingHeartbeat(targetMachine.ID, heartbeatRequest)
 					mId := m.GetId()
+					fmt.Printf("[%s] Sending heartbeat request for peer: %s\n", m.GetName(), targetMachine.GetId())
 					m.Outbox <- GossipPacket{
 						ID:       fmt.Sprintf("%s:%s:%s", mId, targetMachine.GetId(), time.Now()),
 						OriginId: mId,
@@ -252,21 +253,59 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 				}
 			}
 
+			m.GcPendingHeartbeats()
+
 		case packet := <-m.Inbox:
 			if !m.HasSeenPacket(packet.ID) {
 				m.AddSeenPacket(packet.ID)
 
-				if packet.Payload.Resource.Type == ResourceStation {
-					knownStations := m.GetKnownStations()
-					resource := packet.Payload.Resource
-					if _, ok := knownStations[resource.ID]; !ok {
-						fmt.Printf("[%s] Received Gossip Packet: Saw %s from %s\n", m.GetName(), packet.Payload.Resource.Type, packet.OriginId)
-						m.AddToKnownStations(WorldItem{
-							ID:   resource.ID,
-							Type: resource.Type,
-							X:    resource.X,
-							Y:    resource.Y,
-						})
+				switch packet.Payload.Type {
+				case PayloadResource:
+					if packet.Payload.Resource != nil && packet.Payload.Resource.Type == ResourceStation {
+						knownStations := m.GetKnownStations()
+						resource := packet.Payload.Resource
+						if _, ok := knownStations[resource.ID]; !ok {
+							fmt.Printf("[%s] Received Gossip Packet: Saw %s from %s\n", m.GetName(), packet.Payload.Resource.Type, packet.OriginId)
+							m.AddToKnownStations(WorldItem{
+								ID:   resource.ID,
+								Type: resource.Type,
+								X:    resource.X,
+								Y:    resource.Y,
+							})
+						}
+					}
+				case PayloadHeartbeat:
+					if packet.Payload.Heartbeat != nil {
+						heartbeat := packet.Payload.Heartbeat
+						mId := m.GetId()
+						mX, mY := m.GetPosition()
+						batteryLevel := m.GetBatteryLevel()
+
+						switch heartbeat.Type {
+						// Another machine saw this machine, and is requesting a heartbeat response
+						case HeartbeatRequest:
+							fmt.Printf("[%s] Heartbeat request receieved from peer: %s\n", m.Name, packet.OriginId)
+							m.Outbox <- GossipPacket{
+								ID:       fmt.Sprintf("%s:%s:%s", mId, packet.OriginId, time.Now()),
+								OriginId: mId,
+								Payload: PacketPayload{
+									Type: PayloadHeartbeat,
+									Heartbeat: &HeartbeatData{
+										ID:           mId,
+										Type:         HeartbeatResponse,
+										X:            mX,
+										Y:            mY,
+										BatteryLevel: batteryLevel,
+									},
+								},
+								TTL: 1,
+							}
+						// We are getting back a heartbeat response, so just update the pending request to indicate
+						// that we heard back from the machine.
+						case HeartbeatResponse:
+							m.UpdatePendingHeartbeat(packet.OriginId, true)
+							fmt.Printf("[%s] Heartbeat confirmed for peer: %s\n", m.Name, packet.OriginId)
+						}
 					}
 				}
 				packet.TTL -= 1
@@ -482,4 +521,28 @@ func (m *MachineState) SetPendingHeartbeat(targetMachineId string, pendingHeartb
 	defer m.mu.Unlock()
 
 	m.PendingHeartbeats[targetMachineId] = pendingHeartbeat
+}
+
+func (m *MachineState) UpdatePendingHeartbeat(targetMachineId string, heardResponse bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if ping, ok := m.PendingHeartbeats[targetMachineId]; ok {
+		ping.HeardResponse = heardResponse
+		m.PendingHeartbeats[targetMachineId] = ping
+	}
+}
+
+func (m *MachineState) GcPendingHeartbeats() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Janitor phase
+	for id, ping := range m.PendingHeartbeats {
+		if time.Since(ping.LastPingedAt) > HeartbeatMemoryTTL {
+			fmt.Printf("[%s] Heartbeat has expired out of memory for %s.\nResponded? %t\n", m.Name, id, ping.HeardResponse)
+			delete(m.PendingHeartbeats, id)
+		}
+	}
+
 }
