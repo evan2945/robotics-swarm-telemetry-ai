@@ -154,6 +154,16 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 
 		case <-ticker.C:
 			battery_level := m.GetBatteryLevel()
+
+			if battery_level <= 0 {
+				if m.GetState() != "DEAD" {
+					fmt.Printf("[%s] 💀 CRITICAL: Battery fully depleted. Unit deactivated.\n", m.GetName())
+					m.SetBatteryLevel(0.0)
+					m.SetState("DEAD")
+				}
+				continue
+			}
+
 			blueprint := m.GetBlueprint()
 			mX, mY := m.GetPosition()
 			battery_drain_level := blueprint.Battery.DrainRate

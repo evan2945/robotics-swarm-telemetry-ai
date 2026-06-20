@@ -42,6 +42,9 @@ func (e *Engine) Tick(dt float64) {
 	}
 
 	for _, m := range e.Machines {
+		if m.GetBatteryLevel() <= 0 {
+			continue
+		}
 		mVx, mVy := m.GetHeading()
 		mX, mY := m.GetPosition()
 		mTargetX, mTargetY := m.GetTarget()
@@ -68,6 +71,7 @@ func (e *Engine) Tick(dt float64) {
 					}
 
 					m.SetTarget(targetStation.X, targetStation.Y)
+					mTargetX, mTargetY = targetStation.X, targetStation.Y
 				}
 			}
 		}
