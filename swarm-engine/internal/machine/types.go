@@ -178,14 +178,20 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 				knownStations := m.GetKnownStations()
 
 				for _, stationData := range knownStations {
-					distToStation := math.Sqrt(math.Pow((stationData.X-mX), 2) + math.Pow((stationData.Y-mY), 2))
+					// distToStation := math.Sqrt(math.Pow((stationData.X-mX), 2) + math.Pow((stationData.Y-mY), 2))
+					distToStation := getEuclDistance(mX, mY, stationData.X, stationData.Y)
 					if distToStation <= 5.0 {
 						isAtChargingStation = true
 						break
 					}
 				}
 			}
-			if isAtChargingStation {
+			// Charge battery if we just got to the charging station, or if already there and currently charging.
+			if isAtChargingStation || m.GetState() == "CHARGING" {
+				// If we are at the charging station and in LOW_POWER mode, switch to charging mode.
+				if m.GetState() != "CHARGING" {
+					m.SetState("CHARGING")
+				}
 				m.SetBatteryLevel(battery_level + blueprint.Battery.ChargeRate)
 			} else {
 				m.SetBatteryLevel(battery_level - battery_drain_level)
@@ -194,7 +200,7 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 			battery_level = m.GetBatteryLevel()
 			fmt.Printf("Machine %s battery: %f\n", m.GetName(), battery_level)
 
-			if m.GetState() == "LOW_POWER" && battery_level >= 100 {
+			if m.GetState() == "CHARGING" && battery_level >= 100 {
 				m.SetBatteryLevel(100.0)
 				m.SetState("PATROL")
 			}
@@ -555,4 +561,8 @@ func (m *MachineState) GcPendingHeartbeats() {
 		}
 	}
 
+}
+
+func getEuclDistance(x1, y1, x2, y2 float64) float64 {
+	return math.Sqrt(math.Pow(x2-x1, 2) + math.Pow(y2-y1, 2))
 }
