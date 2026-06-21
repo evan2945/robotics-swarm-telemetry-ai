@@ -11,6 +11,20 @@ import (
 const StationMemoryTTL = 10 * time.Second
 const HeartbeatMemoryTTL = 4 * time.Second
 
+type State string
+
+const (
+	StatePatrol   State = "PATROL"
+	StateCharging State = "CHARGING"
+	StateLowPower State = "LOW_POWER"
+	StateDead     State = "DEAD"
+)
+
+type StateBlueprint struct {
+	InitialState     State   `json:"initial_state"`
+	AdditionalStates []State `json:"additional_states"`
+}
+
 // BatteryBlueprint defines power characteristics for a machine class.
 type BatteryBlueprint struct {
 	InitialLevel  float64 `json:"initial_level"`
@@ -40,6 +54,7 @@ type CommunicationBlueprint struct {
 
 // MachineBlueprint represents the unified specification schema.
 type MachineBlueprint struct {
+	States        StateBlueprint         `json:"states"`
 	Battery       BatteryBlueprint       `json:"battery"`
 	Locomotion    LocomotionBlueprint    `json:"locomotion"`
 	Vision        VisionBlueprint        `json:"vision"`
@@ -116,7 +131,7 @@ type MachineState struct {
 	Outbox            chan GossipPacket
 	ID                string                  `json:"id"`
 	Name              string                  `json:"name"`
-	State             string                  `json:"state"`
+	State             State                   `json:"state"`
 	X                 float64                 `json:"x"`
 	Y                 float64                 `json:"y"`
 	TargetX           float64                 `json:"target_x"`
@@ -156,10 +171,10 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 			battery_level := m.GetBatteryLevel()
 
 			if battery_level <= 0 {
-				if m.GetState() != "DEAD" {
+				if m.GetState() != StateDead {
 					fmt.Printf("[%s] 💀 CRITICAL: Battery fully depleted. Unit deactivated.\n", m.GetName())
 					m.SetBatteryLevel(0.0)
-					m.SetState("DEAD")
+					m.SetState(StateDead)
 				}
 				continue
 			}
@@ -167,14 +182,14 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 			blueprint := m.GetBlueprint()
 			mX, mY := m.GetPosition()
 			battery_drain_level := blueprint.Battery.DrainRate
-			if battery_level <= 20 && m.GetState() == "PATROL" {
+			if battery_level <= 20 && m.GetState() == StatePatrol {
 				fmt.Printf("[%s] WARNING: Battery critically low (%f%%). Entering LOW_POWER mode.\n", m.GetName(), m.GetBatteryLevel())
-				m.SetState("LOW_POWER")
+				m.SetState(StateLowPower)
 				battery_drain_level = blueprint.Battery.LowPowerDrain
 			}
 
 			isAtChargingStation := false
-			if m.GetState() == "LOW_POWER" {
+			if m.GetState() == StateLowPower {
 				knownStations := m.GetKnownStations()
 
 				for _, stationData := range knownStations {
@@ -187,10 +202,10 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 				}
 			}
 			// Charge battery if we just got to the charging station, or if already there and currently charging.
-			if isAtChargingStation || m.GetState() == "CHARGING" {
+			if isAtChargingStation || m.GetState() == StateCharging {
 				// If we are at the charging station and in LOW_POWER mode, switch to charging mode.
-				if m.GetState() != "CHARGING" {
-					m.SetState("CHARGING")
+				if m.GetState() != StateCharging {
+					m.SetState(StateCharging)
 				}
 				m.SetBatteryLevel(battery_level + blueprint.Battery.ChargeRate)
 			} else {
@@ -200,9 +215,9 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 			battery_level = m.GetBatteryLevel()
 			fmt.Printf("Machine %s battery: %f\n", m.GetName(), battery_level)
 
-			if m.GetState() == "CHARGING" && battery_level >= 100 {
+			if m.GetState() == StateCharging && battery_level >= 100 {
 				m.SetBatteryLevel(100.0)
-				m.SetState("PATROL")
+				m.SetState(StatePatrol)
 			}
 
 			seenItems := []WorldItem{}
@@ -392,14 +407,14 @@ func (m *MachineState) SetBatteryLevel(new_level float64) {
 	m.BatteryLevel = new_level
 }
 
-func (m *MachineState) GetState() string {
+func (m *MachineState) GetState() State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	return m.State
 }
 
-func (m *MachineState) SetState(newState string) {
+func (m *MachineState) SetState(newState State) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

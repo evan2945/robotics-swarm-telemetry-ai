@@ -16,14 +16,14 @@ import (
 )
 
 type MachineTelemetry struct {
-	ID           string  `json:"id"`
-	Name         string  `json:"name"`
-	X            float64 `json:"x"`
-	Y            float64 `json:"y"`
-	HeadingX     float64 `json:"vx"`
-	HeadingY     float64 `json:"vy"`
-	State        string  `json:"state"`
-	BatteryLevel float64 `json:"battery"`
+	ID           string        `json:"id"`
+	Name         string        `json:"name"`
+	X            float64       `json:"x"`
+	Y            float64       `json:"y"`
+	HeadingX     float64       `json:"vx"`
+	HeadingY     float64       `json:"vy"`
+	State        machine.State `json:"state"`
+	BatteryLevel float64       `json:"battery"`
 }
 
 type ItemTelemetry struct {
@@ -168,7 +168,7 @@ func createMachine(numOfMachines int, name string, specs machine.MachineBlueprin
 				BatteryLevel:      specs.Battery.InitialLevel,
 				TickerInterval:    time.Second,
 				Blueprint:         specs,
-				State:             "PATROL",
+				State:             specs.States.InitialState,
 				Inbox:             make(chan machine.GossipPacket, 20),
 				Outbox:            make(chan machine.GossipPacket, 20),
 				SeenPackets:       make(map[string]bool),

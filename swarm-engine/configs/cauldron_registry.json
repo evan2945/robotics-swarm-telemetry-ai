@@ -1,5 +1,13 @@
 {
   "WATCHER": {
+    "states": {
+        "initial_state": "PATROL",
+        "additional_states": [
+            "LOW_POWER",
+            "CHARGING",
+            "DEAD"
+        ]
+    },
     "battery": {
       "initial_level": 100.0,
       "drain_rate": 2,
@@ -21,6 +29,14 @@
     }
   },
   "SCRAPPER": {
+    "states": {
+        "initial_state": "PATROL",
+        "additional_states": [
+            "LOW_POWER",
+            "CHARGING",
+            "DEAD"
+        ]
+    },
     "battery": {
       "initial_level": 100.0,
       "drain_rate": 3,

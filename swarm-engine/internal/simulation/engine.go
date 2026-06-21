@@ -83,7 +83,7 @@ func (e *Engine) broadcastPacket(sender *machine.MachineState, packet machine.Go
 	senderState := sender.GetState()
 	senderRange := commBlueprint.Range
 
-	if senderState == "LOW_POWER" {
+	if senderState == machine.StateLowPower {
 		senderRange = commBlueprint.LowPowerRange
 	}
 

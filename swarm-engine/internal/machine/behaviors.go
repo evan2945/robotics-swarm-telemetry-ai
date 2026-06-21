@@ -4,7 +4,7 @@ import "math/rand/v2"
 
 type KinematicAction func(params KinematicActionParams)
 
-var KinematicRegistry = map[string]func(m *MachineState, params KinematicActionParams){
+var KinematicRegistry = map[State]func(m *MachineState, params KinematicActionParams){
 	"PATROL":    (*MachineState).HandlePatrolKinematics,
 	"LOW_POWER": (*MachineState).HandleLowPowerKinematics,
 	"CHARGING":  (*MachineState).HandleChargingKinematics,
