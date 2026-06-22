@@ -81,6 +81,7 @@ func (m *MachineState) HandleLowPowerKinematics(params KinematicActionParams) {
 					HasRescueTarget:   false,
 					MachineIdToRescue: "",
 					DrainFromStation:  0.0,
+					AtRescueTarget:    false,
 				},
 			)
 			mTargetX, mTargetY = targetStation.X, targetStation.Y
@@ -124,6 +125,7 @@ func (m *MachineState) HandleChargingKinematics(params KinematicActionParams) {
 				HasRescueTarget:   false,
 				MachineIdToRescue: "",
 				DrainFromStation:  0.0,
+				AtRescueTarget:    false,
 			},
 		)
 		m.SetState(blueprint.States.InitialState)
@@ -178,18 +180,29 @@ func (m *MachineState) HandleRescuingKinematics(params KinematicActionParams) {
 	mTargetX, mTargetY := m.GetTarget()
 	distToTarget := getEuclDistance(mX, mY, mTargetX, mTargetY)
 
+	// If we are within range of the reported target location, check to see if we can
+	// visually "see" the downed machine. If so, begin recharging it.
+	// If not, the machine wasn't actually downed and a reporting machine never
+	// got a heartbeat response from the machine, even though it wasn't down. For
+	// this situation, switch back to "low power" state to return to the station.
 	if distToTarget <= 10 {
-		batteryDrainFromStation := 100.0 - m.GetBatteryLevel()
 		rescueInfo := m.GetRescueInfo()
-		m.SetRescueInfo(
-			RescueData{
-				StationTargeted:   rescueInfo.StationTargeted,
-				HasRescueTarget:   rescueInfo.HasRescueTarget,
-				MachineIdToRescue: rescueInfo.MachineIdToRescue,
-				DrainFromStation:  batteryDrainFromStation,
-			},
-		)
-		m.SetState(StateRecharging)
+		if m.Env.IsMachineInRange(rescueInfo.MachineIdToRescue) {
+			batteryDrainFromStation := 100.0 - m.GetBatteryLevel()
+
+			m.SetRescueInfo(
+				RescueData{
+					StationTargeted:   rescueInfo.StationTargeted,
+					HasRescueTarget:   rescueInfo.HasRescueTarget,
+					MachineIdToRescue: rescueInfo.MachineIdToRescue,
+					DrainFromStation:  batteryDrainFromStation,
+					AtRescueTarget:    true,
+				},
+			)
+			m.SetState(StateRecharging)
+		}
+	} else {
+		m.SetState(StateLowPower)
 	}
 
 	m.ExecuteMovement(

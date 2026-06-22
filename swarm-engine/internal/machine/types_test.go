@@ -44,6 +44,10 @@ func (m MockEnvironment) ConnectToMachine(machineId string) *MachineState {
 	return nil
 }
 
+func (m MockEnvironment) IsMachineInRange(machineId string) bool {
+	return false
+}
+
 func TestRunLifecycle(t *testing.T) {
 	mockMachine := &MachineState{
 		ID:             "machine-01",

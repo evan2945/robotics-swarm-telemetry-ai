@@ -81,6 +81,7 @@ type PayloadType string
 const (
 	PayloadResource  PayloadType = "RESOURCE"
 	PayloadHeartbeat PayloadType = "HEARTBEAT"
+	PayloadSos       PayloadType = "SOS"
 )
 
 type ResourceType string
@@ -111,10 +112,20 @@ type HeartbeatData struct {
 	BatteryLevel float64       `json:"battery_level"`
 }
 
+type SosData struct {
+	ID              string  `json:"id"`
+	Type            string  `json:"type"`
+	TargetMachineId string  `json:"target_machine_id"`
+	OriginName      string  `json:"origin_name"`
+	OriginX         float64 `json:"origin_x"`
+	OriginY         float64 `json:"origin_y"`
+}
+
 type PacketPayload struct {
 	Type      PayloadType    `json:"type"`
 	Resource  *ResourceData  `json:"resource,omitempty"`
 	Heartbeat *HeartbeatData `json:"heartbeat,omitempty"`
+	Sos       *SosData       `json:"sos,omitempty"`
 }
 
 type StationData struct {
@@ -136,6 +147,7 @@ type RescueData struct {
 	HasRescueTarget   bool    `json:"has_rescue_target"`
 	MachineIdToRescue string  `json:"machine_id_to_rescue"`
 	DrainFromStation  float64 `json:"drain_from_station"`
+	AtRescueTarget    bool    `json:"at_rescue_target"`
 }
 
 type MachineState struct {
@@ -172,6 +184,7 @@ type Environment interface {
 	GetVisibleItems(x, y, visionRange float64) []WorldItem
 	GetVisibleMachines(machineId string, x, y, visionRange float64) []*MachineState
 	ConnectToMachine(machineId string) *MachineState
+	IsMachineInRange(machineId string) bool
 }
 
 func (m *MachineState) RunLifecycle(ctx context.Context) {
@@ -328,6 +341,23 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 							m.UpdatePendingHeartbeat(packet.OriginId, true)
 							fmt.Printf("[%s] Heartbeat confirmed for peer: %s\n", m.Name, packet.OriginId)
 						}
+					}
+				case PayloadSos:
+					if m.Name == "SPARKER" && packet.Payload.Sos != nil {
+						sosData := packet.Payload.Sos
+						rescueInfo := m.GetRescueInfo()
+						fmt.Printf("[%s] SOS message received from %s! Dispatching for rescue.\n", m.Name, sosData.OriginName)
+						m.SetTarget(sosData.OriginX, sosData.OriginY)
+						m.SetRescueInfo(
+							RescueData{
+								StationTargeted:   rescueInfo.StationTargeted,
+								HasRescueTarget:   rescueInfo.HasRescueTarget,
+								MachineIdToRescue: sosData.TargetMachineId,
+								DrainFromStation:  rescueInfo.DrainFromStation,
+								AtRescueTarget:    rescueInfo.AtRescueTarget,
+							},
+						)
+						m.SetState(StateRescuing)
 					}
 				}
 				packet.TTL -= 1

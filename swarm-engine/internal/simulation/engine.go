@@ -151,6 +151,16 @@ func (e *Engine) ConnectToMachine(machineId string) *machine.MachineState {
 	return nil
 }
 
+func (e *Engine) IsMachineInRange(machineId string) bool {
+	for _, machine := range e.Machines {
+		if machine.ID == machineId {
+			return true
+		}
+	}
+
+	return false
+}
+
 func getEuclDistance(x1, y1, x2, y2 float64) float64 {
 	return math.Sqrt(math.Pow(x2-x1, 2) + math.Pow(y2-y1, 2))
 }
