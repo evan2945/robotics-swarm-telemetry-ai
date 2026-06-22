@@ -201,6 +201,7 @@ func createMachine(numOfMachines int, name string, specs machine.MachineBlueprin
 				SeenPackets:       make(map[string]bool),
 				KnownStations:     knownStations,
 				PendingHeartbeats: make(map[string]machine.PendingPing),
+				RescueInfo:        &machine.RescueData{},
 			}
 
 			createdMachines = append(createdMachines, machine)

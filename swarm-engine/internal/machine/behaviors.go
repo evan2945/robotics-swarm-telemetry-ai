@@ -56,14 +56,13 @@ func (m *MachineState) HandleLowPowerKinematics(params KinematicActionParams) {
 	mTargetX, mTargetY := m.GetTarget()
 	locBlueprint := m.GetBlueprint().Locomotion
 	speed := locBlueprint.LowPowerSpeed
-	distToStation := getEuclDistance(mX, mY, mTargetX, mTargetY)
 	chargingStationThreshold := 5.0
 
-	if distToStation > chargingStationThreshold && !m.GetRescueInfo().StationTargeted {
-		// If the machine is in low power mode, it needs to head to
-		// the closest charging station.
+	if !m.GetStationTargeted() {
 		knownStations := m.GetKnownStations()
+
 		if len(knownStations) > 0 {
+			// Found a station, pick the closest one and lock onto it.
 			dist := -1.0
 			var targetStation *StationData
 			for _, station := range knownStations {
@@ -75,29 +74,25 @@ func (m *MachineState) HandleLowPowerKinematics(params KinematicActionParams) {
 			}
 
 			m.SetTarget(targetStation.X, targetStation.Y)
-			m.SetRescueInfo(
-				RescueData{
-					StationTargeted:   true,
-					HasRescueTarget:   false,
-					MachineIdToRescue: "",
-					DrainFromStation:  0.0,
-					AtRescueTarget:    false,
-				},
-			)
-			mTargetX, mTargetY = targetStation.X, targetStation.Y
+			m.SetStationTargeted(true)
+
 		} else {
-			// No stations known, keep moving toward your existing target
-			// or pick a random drift vector if close to existing target so that
-			// the machine doesn't freeze.
+			// No stations known. Manage clean wandering waypoints.
 			mTargetX, mTargetY := m.GetTarget()
 			if getEuclDistance(mX, mY, mTargetX, mTargetY) < 5.0 {
+				// Pick a brand new random wandering destination
 				m.SetTarget(rand.Float64()*params.ScreenWidth, rand.Float64()*params.ScreenHeight)
 			}
 		}
-	} else if distToStation <= chargingStationThreshold {
-		fmt.Println("HERERERE3333")
-		// Machine is at the charging state, so transition to "CHARGING" state
+	}
+
+	mTargetX, mTargetY = m.GetTarget()
+	distToTarget := getEuclDistance(mX, mY, mTargetX, mTargetY)
+
+	if m.GetStationTargeted() && distToTarget <= chargingStationThreshold {
+		fmt.Printf("[%s] Successfully docked at station. Initiating charge.\n", m.GetId())
 		m.SetState(StateCharging)
+		return
 	}
 
 	resp := m.ExecuteMovement(MovementParams{
@@ -119,9 +114,9 @@ func (m *MachineState) HandleChargingKinematics(params KinematicActionParams) {
 	if m.GetBatteryLevel() >= 100 {
 		blueprint := m.GetBlueprint()
 		m.SetBatteryLevel(100.0)
+		m.SetStationTargeted(false)
 		m.SetRescueInfo(
-			RescueData{
-				StationTargeted:   false,
+			&RescueData{
 				HasRescueTarget:   false,
 				MachineIdToRescue: "",
 				DrainFromStation:  0.0,
@@ -151,14 +146,13 @@ func (m *MachineState) HandleIdleKinematics(params KinematicActionParams) {
 }
 
 func (m *MachineState) HandleRechargingKinematics(params KinematicActionParams) {
-	// TODO: We need to be able to calculate how much battery was drained to get to the rescue target
 	batteryLevel := m.GetBatteryLevel()
 	rescueInfo := m.GetRescueInfo()
-	blueprint := m.GetBlueprint()
 	drain := rescueInfo.DrainFromStation
 	rechargeLimit := drain + (drain * .1)
 
 	targetMachine := m.Env.ConnectToMachine(rescueInfo.MachineIdToRescue)
+	tBlueprint := targetMachine.GetBlueprint()
 
 	// We set a limit to how much we allow the battery to be drained to recharge another bot.
 	// Once we drop below that limit, the sparker needs to head back to the station to recharge.
@@ -167,12 +161,45 @@ func (m *MachineState) HandleRechargingKinematics(params KinematicActionParams) 
 	// sparkers state to low power, even though it might not be below the threshold, so that
 	// it goes back to the charging station to recharge.
 	if batteryLevel <= rechargeLimit || targetMachine.GetBatteryLevel() >= 50.0 {
+		fmt.Printf("[%s] Target %s stabilized at %.2f%%. Releasing unit.\n",
+			m.GetName(), targetMachine.GetName(), targetMachine.GetBatteryLevel())
+
 		m.SetState(StateLowPower)
-		targetMachine.SetState(blueprint.States.InitialState)
+
+		// Pick a new random target waypoint
+		var targetStation *StationData
+		dist := -1.
+		mX, mY := targetMachine.GetPosition()
+		for _, station := range m.GetKnownStations() {
+			newDist := getEuclDistance(mX, mY, station.X, station.Y)
+			if dist == -1 || newDist < dist {
+				dist = newDist
+				targetStation = station
+			}
+		}
+		targetMachine.SetTarget(targetStation.X, targetStation.Y)
+
+		speed := tBlueprint.Locomotion.Speed
+		vx, vy := CalculateHeading(mX, mY, targetStation.X, m.TargetY, speed)
+		targetMachine.SetHeading(vx, vy)
+
+		targetMachine.SetStationTargeted(true)
+		targetMachine.SetState(StateLowPower)
+
 		return
 	}
 
-	targetMachine.SetState(StateCharging)
+	if targetMachine.GetBatteryLevel() <= 0.0 || targetMachine.GetState() == StateDead {
+		fmt.Printf("[%s] Target %s is dead. Injecting initial jump-start voltage.\n", m.GetName(), targetMachine.GetName())
+
+		targetMachine.SetBatteryLevel(1.0)    // Bring it just above 0 to clear the lifecycle guard clause
+		targetMachine.SetState(StateCharging) // Set its state so it begins its own charging routine
+	} else {
+		// The bot is awake and charging itself now!
+		// We just print logs and maintain the link while our own StateRecharging drain rate ticks down.
+		fmt.Printf("[%s] Monitoring recovery -> Target Battery: %.2f%% | Sparker Battery: %.2f%%\n",
+			m.GetName(), targetMachine.GetBatteryLevel(), batteryLevel)
+	}
 }
 
 func (m *MachineState) HandleRescuingKinematics(params KinematicActionParams) {
@@ -187,12 +214,11 @@ func (m *MachineState) HandleRescuingKinematics(params KinematicActionParams) {
 	// this situation, switch back to "low power" state to return to the station.
 	if distToTarget <= 10 {
 		rescueInfo := m.GetRescueInfo()
-		if m.Env.IsMachineInRange(rescueInfo.MachineIdToRescue) {
+		if rescueInfo != nil && m.Env.IsMachineInRange(rescueInfo.MachineIdToRescue) {
 			batteryDrainFromStation := 100.0 - m.GetBatteryLevel()
 
 			m.SetRescueInfo(
-				RescueData{
-					StationTargeted:   rescueInfo.StationTargeted,
+				&RescueData{
 					HasRescueTarget:   rescueInfo.HasRescueTarget,
 					MachineIdToRescue: rescueInfo.MachineIdToRescue,
 					DrainFromStation:  batteryDrainFromStation,
@@ -200,16 +226,22 @@ func (m *MachineState) HandleRescuingKinematics(params KinematicActionParams) {
 				},
 			)
 			m.SetState(StateRecharging)
+			return
+		} else {
+			fmt.Printf("[%s] Rescue target missing or false alarm. Aborting.\n", m.Name)
+			m.SetState(StateLowPower)
+			return
 		}
-	} else {
-		m.SetState(StateLowPower)
 	}
 
-	m.ExecuteMovement(
+	resp := m.ExecuteMovement(
 		MovementParams{
 			kap:    params,
 			mSpeed: m.GetBlueprint().Locomotion.Speed,
 		})
+
+	m.SetPosition(resp.mX, resp.mY)
+	m.SetHeading(resp.mVx, resp.mVy)
 }
 
 type MovementParams struct {

@@ -19,7 +19,7 @@ WATCHER_COLOR = (0, 255, 128)
 SCRAPPER_COLOR = (238, 130, 238)
 LOW_POWER_COLOR = (255, 140, 0)
 CHARGING_COLOR = (0, 255, 255)
-DEAD_COLOR = (2550, 0, 0)
+DEAD_COLOR = (255, 0, 0)
 DEFAULT_COLOR = (200, 200, 200)
 
 # Set up the display canvas
@@ -151,7 +151,7 @@ def main():
                 
                     if m_type:
                         # Take the first letter of the machine name (e.g., "W", "S")
-                        label_letter = m_type[0].upper()
+                        label_letter = m_type[:2].upper()
                         
                         # Render the letter to a text surface (using crisp white text)
                         text_surface = machine_font.render(label_letter, True, (0, 0, 0))
