@@ -83,7 +83,7 @@ func (e *Engine) broadcastPacket(sender *machine.MachineState, packet machine.Go
 	senderState := sender.GetState()
 	senderRange := commBlueprint.Range
 
-	if senderState == "LOW_POWER" {
+	if senderState == machine.StateLowPower {
 		senderRange = commBlueprint.LowPowerRange
 	}
 
@@ -139,6 +139,26 @@ func (e *Engine) GetVisibleMachines(machineId string, x, y, visionRange float64)
 	}
 
 	return visiblePeers
+}
+
+// A sparker will "connect" to a target machine in order to charge its battery
+func (e *Engine) ConnectToMachine(machineId string) *machine.MachineState {
+	for _, machine := range e.Machines {
+		if machine.ID == machineId {
+			return machine
+		}
+	}
+	return nil
+}
+
+func (e *Engine) IsMachineInRange(machineId string) bool {
+	for _, machine := range e.Machines {
+		if machine.ID == machineId {
+			return true
+		}
+	}
+
+	return false
 }
 
 func getEuclDistance(x1, y1, x2, y2 float64) float64 {

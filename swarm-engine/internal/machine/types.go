@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"sync"
 	"time"
 )
@@ -11,12 +12,31 @@ import (
 const StationMemoryTTL = 10 * time.Second
 const HeartbeatMemoryTTL = 4 * time.Second
 
+type State string
+
+const (
+	StatePatrol     State = "PATROL"
+	StateCharging   State = "CHARGING"
+	StateLowPower   State = "LOW_POWER"
+	StateDead       State = "DEAD"
+	StateIdle       State = "IDLE"
+	StateRecharging State = "RECHARGING"
+	StateRescuing   State = "RESCUING"
+)
+
+type StateBlueprint struct {
+	InitialState     State   `json:"initial_state"`
+	AdditionalStates []State `json:"additional_states"`
+}
+
 // BatteryBlueprint defines power characteristics for a machine class.
 type BatteryBlueprint struct {
-	InitialLevel  float64 `json:"initial_level"`
-	DrainRate     float64 `json:"drain_rate"`
-	ChargeRate    float64 `json:"charge_rate"`
-	LowPowerDrain float64 `json:"low_power_drain"`
+	InitialLevel        float64 `json:"initial_level"`
+	DrainRate           float64 `json:"drain_rate"`
+	ChargeRate          float64 `json:"charge_rate"`
+	LowPowerDrain       float64 `json:"low_power_drain"`
+	RechargingDrainRate float64 `json:"recharging_drain_rate"`
+	TransferEfficiency  float64 `json:"transfer_efficiency"`
 }
 
 // LocomotionBlueprint defines kinematic speed constraints.
@@ -40,6 +60,7 @@ type CommunicationBlueprint struct {
 
 // MachineBlueprint represents the unified specification schema.
 type MachineBlueprint struct {
+	States        StateBlueprint         `json:"states"`
 	Battery       BatteryBlueprint       `json:"battery"`
 	Locomotion    LocomotionBlueprint    `json:"locomotion"`
 	Vision        VisionBlueprint        `json:"vision"`
@@ -61,6 +82,7 @@ type PayloadType string
 const (
 	PayloadResource  PayloadType = "RESOURCE"
 	PayloadHeartbeat PayloadType = "HEARTBEAT"
+	PayloadSos       PayloadType = "SOS"
 )
 
 type ResourceType string
@@ -91,16 +113,28 @@ type HeartbeatData struct {
 	BatteryLevel float64       `json:"battery_level"`
 }
 
+type SosData struct {
+	ID              string    `json:"id"`
+	Type            string    `json:"type"`
+	TargetMachineId string    `json:"target_machine_id"`
+	OriginName      string    `json:"origin_name"`
+	OriginX         float64   `json:"origin_x"`
+	OriginY         float64   `json:"origin_y"`
+	DetectedAt      time.Time `json:"detected_at"`
+}
+
 type PacketPayload struct {
 	Type      PayloadType    `json:"type"`
 	Resource  *ResourceData  `json:"resource,omitempty"`
 	Heartbeat *HeartbeatData `json:"heartbeat,omitempty"`
+	Sos       *SosData       `json:"sos,omitempty"`
 }
 
 type StationData struct {
 	DiscoveredAt time.Time `json:"discovered_at"`
 	X            float64   `json:"x"`
 	Y            float64   `json:"y"`
+	ExpiresAfter float64   `json:"expires_after"`
 }
 
 type PendingPing struct {
@@ -108,6 +142,15 @@ type PendingPing struct {
 	LastKnownX    float64   `json:"last_known_x"`
 	LastKnownY    float64   `json:"last_known_y"`
 	HeardResponse bool      `json:"heard_response"`
+	TargetX       float64   `json:"target_x"`
+	TargetY       float64   `json:"target_y"`
+}
+
+type RescueData struct {
+	HasRescueTarget   bool    `json:"has_rescue_target"`
+	MachineIdToRescue string  `json:"machine_id_to_rescue"`
+	DrainFromStation  float64 `json:"drain_from_station"`
+	AtRescueTarget    bool    `json:"at_rescue_target"`
 }
 
 type MachineState struct {
@@ -116,7 +159,7 @@ type MachineState struct {
 	Outbox            chan GossipPacket
 	ID                string                  `json:"id"`
 	Name              string                  `json:"name"`
-	State             string                  `json:"state"`
+	State             State                   `json:"state"`
 	X                 float64                 `json:"x"`
 	Y                 float64                 `json:"y"`
 	TargetX           float64                 `json:"target_x"`
@@ -130,6 +173,9 @@ type MachineState struct {
 	Env               Environment             `json:"environment"`
 	KnownStations     map[string]*StationData `json:"known_stations"`
 	PendingHeartbeats map[string]PendingPing  `json:"pending_heartbeats"`
+	RescueInfo        *RescueData             `json:"rescue_info"`
+	SosMessages       []*SosData              `json:"sos_messages"`
+	StationTargeted   bool                    `json:"station_targeted"`
 }
 
 type WorldItem struct {
@@ -142,6 +188,8 @@ type WorldItem struct {
 type Environment interface {
 	GetVisibleItems(x, y, visionRange float64) []WorldItem
 	GetVisibleMachines(machineId string, x, y, visionRange float64) []*MachineState
+	ConnectToMachine(machineId string) *MachineState
+	IsMachineInRange(machineId string) bool
 }
 
 func (m *MachineState) RunLifecycle(ctx context.Context) {
@@ -153,56 +201,33 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 			return
 
 		case <-ticker.C:
-			battery_level := m.GetBatteryLevel()
+			batteryLevel := m.GetBatteryLevel()
+			blueprint := m.GetBlueprint()
 
-			if battery_level <= 0 {
-				if m.GetState() != "DEAD" {
-					fmt.Printf("[%s] 💀 CRITICAL: Battery fully depleted. Unit deactivated.\n", m.GetName())
+			if batteryLevel <= 0 {
+				if m.GetState() != StateDead {
+					fmt.Printf("[%s] CRITICAL: Battery fully depleted. Unit deactivated.\n", m.GetName())
 					m.SetBatteryLevel(0.0)
-					m.SetState("DEAD")
+					m.SetState(StateDead)
 				}
 				continue
 			}
 
-			blueprint := m.GetBlueprint()
-			mX, mY := m.GetPosition()
-			battery_drain_level := blueprint.Battery.DrainRate
-			if battery_level <= 20 && m.GetState() == "PATROL" {
-				fmt.Printf("[%s] WARNING: Battery critically low (%f%%). Entering LOW_POWER mode.\n", m.GetName(), m.GetBatteryLevel())
-				m.SetState("LOW_POWER")
-				battery_drain_level = blueprint.Battery.LowPowerDrain
+			switch m.GetState() {
+			case StateCharging:
+				m.SetBatteryLevel(batteryLevel + blueprint.Battery.ChargeRate)
+			case StateLowPower:
+				m.SetBatteryLevel(batteryLevel - blueprint.Battery.LowPowerDrain)
+			case StateRecharging:
+				m.SetBatteryLevel(batteryLevel - blueprint.Battery.RechargingDrainRate)
+			case StateIdle:
+			default:
+				m.SetBatteryLevel(batteryLevel - blueprint.Battery.DrainRate)
 			}
 
-			isAtChargingStation := false
-			if m.GetState() == "LOW_POWER" {
-				knownStations := m.GetKnownStations()
-
-				for _, stationData := range knownStations {
-					// distToStation := math.Sqrt(math.Pow((stationData.X-mX), 2) + math.Pow((stationData.Y-mY), 2))
-					distToStation := getEuclDistance(mX, mY, stationData.X, stationData.Y)
-					if distToStation <= 5.0 {
-						isAtChargingStation = true
-						break
-					}
-				}
-			}
-			// Charge battery if we just got to the charging station, or if already there and currently charging.
-			if isAtChargingStation || m.GetState() == "CHARGING" {
-				// If we are at the charging station and in LOW_POWER mode, switch to charging mode.
-				if m.GetState() != "CHARGING" {
-					m.SetState("CHARGING")
-				}
-				m.SetBatteryLevel(battery_level + blueprint.Battery.ChargeRate)
-			} else {
-				m.SetBatteryLevel(battery_level - battery_drain_level)
-			}
-
-			battery_level = m.GetBatteryLevel()
-			fmt.Printf("Machine %s battery: %f\n", m.GetName(), battery_level)
-
-			if m.GetState() == "CHARGING" && battery_level >= 100 {
-				m.SetBatteryLevel(100.0)
-				m.SetState("PATROL")
+			batteryLevel = m.GetBatteryLevel()
+			if batteryLevel <= 20.0 || m.GetName() == "SCRAPPER" {
+				fmt.Printf("Machine %s battery: %f\n", m.GetName(), batteryLevel)
 			}
 
 			seenItems := []WorldItem{}
@@ -215,7 +240,7 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 				now := time.Now()
 				if _, ok := knownStations[item.ID]; !ok {
 					fmt.Printf("[%s] has seen world item %s!\n", m.GetName(), item.Type)
-					m.AddToKnownStations(item)
+					m.AddToKnownStations(item, StationMemoryTTL.Seconds())
 					m.Outbox <- GossipPacket{
 						ID:       fmt.Sprintf("%s:%s:%s", m.GetId(), item.ID, time.Now()),
 						OriginId: m.ID,
@@ -236,10 +261,11 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 			}
 
 			seenMachines := []*MachineState{}
-			if m.Env != nil {
+			if m.Env != nil && m.GetName() != "SPARKER" {
 				seenMachines = m.Env.GetVisibleMachines(m.ID, m.X, m.Y, blueprint.Vision.Range)
 			}
 
+			mX, mY := m.GetPosition()
 			for _, targetMachine := range seenMachines {
 				if _, ok := m.GetPendingHeartbeats()[targetMachine.ID]; !ok {
 					heartbeatRequest := PendingPing{
@@ -247,6 +273,8 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 						LastKnownX:    mX,
 						LastKnownY:    mY,
 						HeardResponse: false,
+						TargetX:       targetMachine.X,
+						TargetY:       targetMachine.Y,
 					}
 					m.SetPendingHeartbeat(targetMachine.ID, heartbeatRequest)
 					mId := m.GetId()
@@ -261,7 +289,7 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 								Type:         HeartbeatRequest,
 								X:            mX,
 								Y:            mY,
-								BatteryLevel: battery_level,
+								BatteryLevel: batteryLevel,
 							},
 						},
 						TTL: 1,
@@ -272,6 +300,10 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 			m.GcPendingHeartbeats()
 
 		case packet := <-m.Inbox:
+			batteryLevel := m.GetBatteryLevel()
+			if batteryLevel <= 0 {
+				continue
+			}
 			if !m.HasSeenPacket(packet.ID) {
 				m.AddSeenPacket(packet.ID)
 
@@ -287,7 +319,7 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 								Type: resource.Type,
 								X:    resource.X,
 								Y:    resource.Y,
-							})
+							}, StationMemoryTTL.Seconds())
 						}
 					}
 				case PayloadHeartbeat:
@@ -321,6 +353,43 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 						case HeartbeatResponse:
 							m.UpdatePendingHeartbeat(packet.OriginId, true)
 							fmt.Printf("[%s] Heartbeat confirmed for peer: %s\n", m.Name, packet.OriginId)
+						}
+					}
+				case PayloadSos:
+					if m.GetName() == "SPARKER" && packet.Payload.Sos != nil {
+						fmt.Printf("[%s] Received SOS message, beginning rescue!\n", m.GetName())
+						sosData := packet.Payload.Sos
+
+						if m.ID == sosData.TargetMachineId {
+							packet.TTL = 0
+							break
+						}
+
+						if m.GetState() == StateLowPower {
+							break
+						}
+
+						rescueInfo := m.GetRescueInfo()
+						isAlreadyRescuingThisBot := false
+						if rescueInfo != nil {
+							isAlreadyRescuingThisBot = (rescueInfo.MachineIdToRescue == sosData.TargetMachineId)
+						}
+						fmt.Println(m.GetId() != sosData.TargetMachineId)
+						fmt.Println(isAlreadyRescuingThisBot)
+						// If the packet isn't about a failed heartbeat request from the sparker itself (can't rescue itself)
+						// or if the sparker isn't already on the way to rescue said machine, initiate the rescue.
+						if m.GetId() != sosData.TargetMachineId && !isAlreadyRescuingThisBot {
+							fmt.Printf("[%s] SOS message received from %s! Dispatching for rescue.\n", m.GetName(), sosData.OriginName)
+							m.SetTarget(sosData.OriginX, sosData.OriginY)
+							m.SetRescueInfo(
+								&RescueData{
+									HasRescueTarget:   true,
+									MachineIdToRescue: sosData.TargetMachineId,
+									DrainFromStation:  0.0,
+									AtRescueTarget:    false,
+								},
+							)
+							m.SetState(StateRescuing)
 						}
 					}
 				}
@@ -392,14 +461,14 @@ func (m *MachineState) SetBatteryLevel(new_level float64) {
 	m.BatteryLevel = new_level
 }
 
-func (m *MachineState) GetState() string {
+func (m *MachineState) GetState() State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	return m.State
 }
 
-func (m *MachineState) SetState(newState string) {
+func (m *MachineState) SetState(newState State) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -456,10 +525,13 @@ func (m *MachineState) GetSeenPackets() map[string]bool {
 }
 
 func (m *MachineState) QueuePacketToSend(packet GossipPacket) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.Outbox <- packet
+	select {
+	case m.Outbox <- packet:
+		// Packet queued successfully
+	default:
+		// Channel is full. Drop the packet safely instead of deadlocking!
+		fmt.Printf("[%s] Network congestion: Outbox full, dropping packet.\n", m.Name)
+	}
 }
 
 func (m *MachineState) GetKnownStations() map[string]*StationData {
@@ -468,7 +540,8 @@ func (m *MachineState) GetKnownStations() map[string]*StationData {
 
 	// Janitor phase
 	for id, data := range m.KnownStations {
-		if time.Since(data.DiscoveredAt) > StationMemoryTTL {
+		expiresAfter := data.ExpiresAfter
+		if expiresAfter != -1 && time.Since(data.DiscoveredAt) > time.Duration(expiresAfter)*time.Second {
 			fmt.Printf("[%s] Station has expired out of memory.\n", m.Name)
 			delete(m.KnownStations, id)
 		}
@@ -477,7 +550,7 @@ func (m *MachineState) GetKnownStations() map[string]*StationData {
 	return m.KnownStations
 }
 
-func (m *MachineState) AddToKnownStations(item WorldItem) {
+func (m *MachineState) AddToKnownStations(item WorldItem, expiresAfter float64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -485,6 +558,7 @@ func (m *MachineState) AddToKnownStations(item WorldItem) {
 		DiscoveredAt: time.Now(),
 		X:            item.X,
 		Y:            item.Y,
+		ExpiresAfter: expiresAfter,
 	}
 }
 
@@ -496,6 +570,41 @@ func (m *MachineState) UpdateKnownStationsTime(id string, t time.Time) {
 	station.DiscoveredAt = t
 
 	m.KnownStations[id] = station
+}
+
+func (m *MachineState) GetRescueInfo() *RescueData {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.RescueInfo
+}
+
+func (m *MachineState) SetRescueInfo(data *RescueData) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.RescueInfo = data
+}
+
+func (m *MachineState) GetSosMessages() []*SosData {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for idx, message := range m.SosMessages {
+		if time.Since(message.DetectedAt) >= 20*time.Second {
+			fmt.Printf("[%s] Sos message expired and removed.\n", m.Name)
+			m.SosMessages = slices.Delete(m.SosMessages, idx, idx+1)
+		}
+	}
+
+	return m.SosMessages
+}
+
+func (m *MachineState) AddToSosMessages(data *SosData) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.SosMessages = append(m.SosMessages, data)
 }
 
 func (m *MachineState) GetActiveBeacons() []GossipPacket {
@@ -521,6 +630,26 @@ func (m *MachineState) GetActiveBeacons() []GossipPacket {
 			})
 		}
 	}
+
+	for _, sos := range m.SosMessages {
+		if time.Since(sos.DetectedAt) < 20*time.Second {
+			packets = append(packets, GossipPacket{
+				ID:       fmt.Sprintf("%s:%s", m.ID, time.Now()),
+				OriginId: m.ID,
+				Payload: PacketPayload{
+					Type: PayloadSos,
+					Sos:  sos,
+				},
+				TTL: 2,
+			})
+		} else {
+			fmt.Printf("[%s] Sos message expired and removed.\n", m.Name)
+		}
+	}
+
+	m.SosMessages = slices.DeleteFunc(m.SosMessages, func(sos *SosData) bool {
+		return time.Since(sos.DetectedAt) >= 20*time.Second
+	})
 
 	return packets
 }
@@ -549,6 +678,20 @@ func (m *MachineState) UpdatePendingHeartbeat(targetMachineId string, heardRespo
 	}
 }
 
+func (m *MachineState) GetStationTargeted() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.StationTargeted
+}
+
+func (m *MachineState) SetStationTargeted(targeted bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.StationTargeted = targeted
+}
+
 func (m *MachineState) GcPendingHeartbeats() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -557,6 +700,29 @@ func (m *MachineState) GcPendingHeartbeats() {
 	for id, ping := range m.PendingHeartbeats {
 		if time.Since(ping.LastPingedAt) > HeartbeatMemoryTTL {
 			fmt.Printf("[%s] Heartbeat has expired out of memory for %s.\nResponded? %t\n", m.Name, id, ping.HeardResponse)
+			if !ping.HeardResponse {
+				fmt.Println("No heartbeat response heard, sending SOS message.")
+				sosData := &SosData{
+					ID:              fmt.Sprintf("SOS-%s", m.ID),
+					Type:            "SOS",
+					TargetMachineId: id,
+					OriginName:      m.ID,
+					OriginX:         ping.TargetX,
+					OriginY:         ping.TargetY,
+					DetectedAt:      time.Now(),
+				}
+				m.SosMessages = append(m.SosMessages, sosData)
+
+				m.QueuePacketToSend(GossipPacket{
+					ID:       fmt.Sprintf("%s:%s", m.ID, time.Now()),
+					OriginId: m.ID,
+					Payload: PacketPayload{
+						Type: PayloadSos,
+						Sos:  sosData,
+					},
+					TTL: 3,
+				})
+			}
 			delete(m.PendingHeartbeats, id)
 		}
 	}

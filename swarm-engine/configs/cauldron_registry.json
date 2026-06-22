@@ -1,10 +1,20 @@
 {
   "WATCHER": {
+    "states": {
+        "initial_state": "PATROL",
+        "additional_states": [
+            "LOW_POWER",
+            "CHARGING",
+            "DEAD"
+        ]
+    },
     "battery": {
       "initial_level": 100.0,
       "drain_rate": 2,
       "charge_rate": 6,
-      "low_power_drain": 0.015
+      "low_power_drain": 1.0,
+      "recharging_drain_rate": 0.0,
+      "transfer_efficiency": 0.0
     },
     "locomotion": {
       "speed": 100,
@@ -21,11 +31,21 @@
     }
   },
   "SCRAPPER": {
+    "states": {
+        "initial_state": "PATROL",
+        "additional_states": [
+            "LOW_POWER",
+            "CHARGING",
+            "DEAD"
+        ]
+    },
     "battery": {
       "initial_level": 100.0,
       "drain_rate": 3,
       "charge_rate": 5,
-      "low_power_drain": 0.03
+      "low_power_drain": 1.5,
+      "recharging_drain_rate": 0.0,
+      "transfer_efficiency": 0.0
     },
     "locomotion": {
       "speed": 65,
@@ -39,6 +59,39 @@
     "communication": {
       "range": 250.0,
       "low_power_range": 400.0
+    }
+  },
+  "SPARKER": {
+    "states": {
+        "initial_state": "IDLE",
+        "additional_states": [
+            "RESCUING",
+            "RECHARGING",
+            "LOW_POWER",
+            "CHARGING",
+            "DEAD"
+        ]
+    },
+    "battery": {
+      "initial_level": 100.0,
+      "drain_rate": 1,
+      "charge_rate": 6,
+      "low_power_drain": 0.5,
+      "recharging_drain_rate": 8.0,
+      "transfer_efficiency": 0.8
+    },
+    "locomotion": {
+      "speed": 90,
+      "low_power_speed": 35.0,
+      "evasion_threshold": 40.0
+    },
+    "vision": {
+      "range":150.0,
+      "angle_degrees": 120.0
+    },
+    "communication": {
+      "range": 80.0,
+      "low_power_range": 120.0
     }
   }
 }

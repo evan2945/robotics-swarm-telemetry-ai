@@ -16,14 +16,14 @@ import (
 )
 
 type MachineTelemetry struct {
-	ID           string  `json:"id"`
-	Name         string  `json:"name"`
-	X            float64 `json:"x"`
-	Y            float64 `json:"y"`
-	HeadingX     float64 `json:"vx"`
-	HeadingY     float64 `json:"vy"`
-	State        string  `json:"state"`
-	BatteryLevel float64 `json:"battery"`
+	ID           string        `json:"id"`
+	Name         string        `json:"name"`
+	X            float64       `json:"x"`
+	Y            float64       `json:"y"`
+	HeadingX     float64       `json:"vx"`
+	HeadingY     float64       `json:"vy"`
+	State        machine.State `json:"state"`
+	BatteryLevel float64       `json:"battery"`
 }
 
 type ItemTelemetry struct {
@@ -38,6 +38,8 @@ type FrameTelemetry struct {
 	Machines  []MachineTelemetry `json:"machines"`
 	Items     []ItemTelemetry    `json:"items"`
 }
+
+const stationId = "station-01"
 
 func main() {
 	fmt.Println("[Hephaestus Core] Initializing Swarm Simulation Engine Skeleton...")
@@ -58,13 +60,13 @@ func main() {
 
 	machines := []*machine.MachineState{}
 	for name, specs := range registry {
-		machines = append(machines, createMachine(1, name, specs)...)
+		machines = append(machines, createMachine(1, name, specs, stationId)...)
 	}
 
 	engine := simulation.NewEngine(machines, 0.0)
 	engine.Items = []machine.WorldItem{
 		{
-			ID:   "station-01",
+			ID:   stationId,
 			Type: machine.ResourceStation,
 			X:    engine.Width / 2,
 			Y:    engine.Height / 2,
@@ -148,12 +150,37 @@ func main() {
 	}
 }
 
-func createMachine(numOfMachines int, name string, specs machine.MachineBlueprint) []*machine.MachineState {
+func createMachine(numOfMachines int, name string, specs machine.MachineBlueprint, stationId string) []*machine.MachineState {
 	createdMachines := []*machine.MachineState{}
 	machineNum := 1
 
 	const canvasWidth = 800.0
 	const canvasHeight = 600.0
+
+	startX := rand.Float64() * canvasWidth
+	startY := rand.Float64() * canvasHeight
+
+	targetX := rand.Float64() * canvasWidth
+	targetY := rand.Float64() * canvasHeight
+
+	knownStations := make(map[string]*machine.StationData)
+
+	// Specific setup for the sparker
+	if name == "SPARKER" {
+		startX = canvasWidth / 2
+		startY = canvasHeight / 2
+
+		targetX = startX
+		targetY = startY
+
+		knownStations[stationId] = &machine.StationData{
+			DiscoveredAt: time.Now(),
+			X:            startX,
+			Y:            startY,
+			ExpiresAfter: -1,
+		}
+	}
+
 	for {
 		if numOfMachines == 0 {
 			return createdMachines
@@ -161,19 +188,20 @@ func createMachine(numOfMachines int, name string, specs machine.MachineBlueprin
 			machine := &machine.MachineState{
 				ID:                fmt.Sprintf("%s-%d", name, machineNum),
 				Name:              name,
-				X:                 rand.Float64() * canvasWidth,
-				Y:                 rand.Float64() * canvasHeight,
-				TargetX:           rand.Float64() * canvasWidth,
-				TargetY:           rand.Float64() * canvasHeight,
+				X:                 startX,
+				Y:                 startY,
+				TargetX:           targetX,
+				TargetY:           targetY,
 				BatteryLevel:      specs.Battery.InitialLevel,
 				TickerInterval:    time.Second,
 				Blueprint:         specs,
-				State:             "PATROL",
+				State:             specs.States.InitialState,
 				Inbox:             make(chan machine.GossipPacket, 20),
 				Outbox:            make(chan machine.GossipPacket, 20),
 				SeenPackets:       make(map[string]bool),
-				KnownStations:     make(map[string]*machine.StationData),
+				KnownStations:     knownStations,
 				PendingHeartbeats: make(map[string]machine.PendingPing),
+				RescueInfo:        &machine.RescueData{},
 			}
 
 			createdMachines = append(createdMachines, machine)
