@@ -14,10 +14,13 @@ const HeartbeatMemoryTTL = 4 * time.Second
 type State string
 
 const (
-	StatePatrol   State = "PATROL"
-	StateCharging State = "CHARGING"
-	StateLowPower State = "LOW_POWER"
-	StateDead     State = "DEAD"
+	StatePatrol     State = "PATROL"
+	StateCharging   State = "CHARGING"
+	StateLowPower   State = "LOW_POWER"
+	StateDead       State = "DEAD"
+	StateIdle       State = "IDLE"
+	StateRecharging State = "RECHARGING"
+	StateRescuing   State = "RESCUING"
 )
 
 type StateBlueprint struct {
@@ -27,10 +30,12 @@ type StateBlueprint struct {
 
 // BatteryBlueprint defines power characteristics for a machine class.
 type BatteryBlueprint struct {
-	InitialLevel  float64 `json:"initial_level"`
-	DrainRate     float64 `json:"drain_rate"`
-	ChargeRate    float64 `json:"charge_rate"`
-	LowPowerDrain float64 `json:"low_power_drain"`
+	InitialLevel        float64 `json:"initial_level"`
+	DrainRate           float64 `json:"drain_rate"`
+	ChargeRate          float64 `json:"charge_rate"`
+	LowPowerDrain       float64 `json:"low_power_drain"`
+	RechargingDrainRate float64 `json:"recharging_drain_rate"`
+	TransferEfficiency  float64 `json:"transfer_efficiency"`
 }
 
 // LocomotionBlueprint defines kinematic speed constraints.
@@ -145,6 +150,7 @@ type MachineState struct {
 	Env               Environment             `json:"environment"`
 	KnownStations     map[string]*StationData `json:"known_stations"`
 	PendingHeartbeats map[string]PendingPing  `json:"pending_heartbeats"`
+	StationTargeted   bool                    `json:"station_targeted"`
 }
 
 type WorldItem struct {
@@ -168,9 +174,10 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 			return
 
 		case <-ticker.C:
-			battery_level := m.GetBatteryLevel()
+			batteryLevel := m.GetBatteryLevel()
+			blueprint := m.GetBlueprint()
 
-			if battery_level <= 0 {
+			if batteryLevel <= 0 {
 				if m.GetState() != StateDead {
 					fmt.Printf("[%s] 💀 CRITICAL: Battery fully depleted. Unit deactivated.\n", m.GetName())
 					m.SetBatteryLevel(0.0)
@@ -179,46 +186,20 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 				continue
 			}
 
-			blueprint := m.GetBlueprint()
-			mX, mY := m.GetPosition()
-			battery_drain_level := blueprint.Battery.DrainRate
-			if battery_level <= 20 && m.GetState() == StatePatrol {
-				fmt.Printf("[%s] WARNING: Battery critically low (%f%%). Entering LOW_POWER mode.\n", m.GetName(), m.GetBatteryLevel())
-				m.SetState(StateLowPower)
-				battery_drain_level = blueprint.Battery.LowPowerDrain
+			switch m.GetState() {
+			case StateCharging:
+				m.SetBatteryLevel(batteryLevel + blueprint.Battery.ChargeRate)
+			case StateLowPower:
+				m.SetBatteryLevel(batteryLevel - blueprint.Battery.LowPowerDrain)
+			case StateRecharging:
+				m.SetBatteryLevel(batteryLevel - blueprint.Battery.RechargingDrainRate)
+			case StateIdle:
+			default:
+				m.SetBatteryLevel(batteryLevel - blueprint.Battery.DrainRate)
 			}
 
-			isAtChargingStation := false
-			if m.GetState() == StateLowPower {
-				knownStations := m.GetKnownStations()
-
-				for _, stationData := range knownStations {
-					// distToStation := math.Sqrt(math.Pow((stationData.X-mX), 2) + math.Pow((stationData.Y-mY), 2))
-					distToStation := getEuclDistance(mX, mY, stationData.X, stationData.Y)
-					if distToStation <= 5.0 {
-						isAtChargingStation = true
-						break
-					}
-				}
-			}
-			// Charge battery if we just got to the charging station, or if already there and currently charging.
-			if isAtChargingStation || m.GetState() == StateCharging {
-				// If we are at the charging station and in LOW_POWER mode, switch to charging mode.
-				if m.GetState() != StateCharging {
-					m.SetState(StateCharging)
-				}
-				m.SetBatteryLevel(battery_level + blueprint.Battery.ChargeRate)
-			} else {
-				m.SetBatteryLevel(battery_level - battery_drain_level)
-			}
-
-			battery_level = m.GetBatteryLevel()
-			fmt.Printf("Machine %s battery: %f\n", m.GetName(), battery_level)
-
-			if m.GetState() == StateCharging && battery_level >= 100 {
-				m.SetBatteryLevel(100.0)
-				m.SetState(StatePatrol)
-			}
+			batteryLevel = m.GetBatteryLevel()
+			fmt.Printf("Machine %s battery: %f\n", m.GetName(), batteryLevel)
 
 			seenItems := []WorldItem{}
 			if m.Env != nil {
@@ -255,6 +236,7 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 				seenMachines = m.Env.GetVisibleMachines(m.ID, m.X, m.Y, blueprint.Vision.Range)
 			}
 
+			mX, mY := m.GetPosition()
 			for _, targetMachine := range seenMachines {
 				if _, ok := m.GetPendingHeartbeats()[targetMachine.ID]; !ok {
 					heartbeatRequest := PendingPing{
@@ -276,7 +258,7 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 								Type:         HeartbeatRequest,
 								X:            mX,
 								Y:            mY,
-								BatteryLevel: battery_level,
+								BatteryLevel: batteryLevel,
 							},
 						},
 						TTL: 1,
@@ -511,6 +493,20 @@ func (m *MachineState) UpdateKnownStationsTime(id string, t time.Time) {
 	station.DiscoveredAt = t
 
 	m.KnownStations[id] = station
+}
+
+func (m *MachineState) SetStationTargeted(targeted bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.StationTargeted = targeted
+}
+
+func (m *MachineState) GetStationTargeted() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.StationTargeted
 }
 
 func (m *MachineState) GetActiveBeacons() []GossipPacket {

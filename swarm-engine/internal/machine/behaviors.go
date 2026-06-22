@@ -1,13 +1,19 @@
 package machine
 
-import "math/rand/v2"
+import (
+	"fmt"
+	"math/rand/v2"
+)
 
 type KinematicAction func(params KinematicActionParams)
 
 var KinematicRegistry = map[State]func(m *MachineState, params KinematicActionParams){
-	"PATROL":    (*MachineState).HandlePatrolKinematics,
-	"LOW_POWER": (*MachineState).HandleLowPowerKinematics,
-	"CHARGING":  (*MachineState).HandleChargingKinematics,
+	"PATROL":     (*MachineState).HandlePatrolKinematics,
+	"LOW_POWER":  (*MachineState).HandleLowPowerKinematics,
+	"CHARGING":   (*MachineState).HandleChargingKinematics,
+	"IDLE":       (*MachineState).HandleIdleKinematics,
+	"RECHARGING": (*MachineState).HandleRechargingKinematics,
+	"RESCUING":   (*MachineState).HandleRescuingKinematics,
 }
 
 type KinematicActionParams struct {
@@ -17,6 +23,13 @@ type KinematicActionParams struct {
 }
 
 func (m *MachineState) HandlePatrolKinematics(params KinematicActionParams) {
+	batteryLevel := m.GetBatteryLevel()
+	if batteryLevel <= 20 && m.GetState() == StatePatrol {
+		fmt.Printf("[%s] WARNING: Battery critically low (%f%%). Entering LOW_POWER mode.\n", m.GetName(), batteryLevel)
+		m.SetState(StateLowPower)
+		return
+	}
+
 	blueprint := m.GetBlueprint().Locomotion
 
 	mX, mY := m.GetPosition()
@@ -43,8 +56,10 @@ func (m *MachineState) HandleLowPowerKinematics(params KinematicActionParams) {
 	mTargetX, mTargetY := m.GetTarget()
 	locBlueprint := m.GetBlueprint().Locomotion
 	speed := locBlueprint.LowPowerSpeed
+	distToStation := getEuclDistance(mX, mY, mTargetX, mTargetY)
+	chargingStationThreshold := 5.0
 
-	if getEuclDistance(mX, mY, mTargetX, mTargetY) > 5.0 {
+	if distToStation > chargingStationThreshold && !m.GetStationTargeted() {
 		// If the machine is in low power mode, it needs to head to
 		// the closest charging station.
 		knownStations := m.GetKnownStations()
@@ -60,6 +75,7 @@ func (m *MachineState) HandleLowPowerKinematics(params KinematicActionParams) {
 			}
 
 			m.SetTarget(targetStation.X, targetStation.Y)
+			m.SetStationTargeted(true)
 			mTargetX, mTargetY = targetStation.X, targetStation.Y
 		} else {
 			// No stations known, keep moving toward your existing target
@@ -70,6 +86,9 @@ func (m *MachineState) HandleLowPowerKinematics(params KinematicActionParams) {
 				m.SetTarget(rand.Float64()*params.ScreenWidth, rand.Float64()*params.ScreenHeight)
 			}
 		}
+	} else if distToStation <= chargingStationThreshold {
+		// Machine is at the charging state, so transition to "CHARGING" state
+		m.SetState(StateCharging)
 	}
 
 	resp := m.ExecuteMovement(MovementParams{
@@ -87,6 +106,25 @@ func (m *MachineState) HandleChargingKinematics(params KinematicActionParams) {
 	// Explicitly setting position to previous location to prevent minor drift
 	mX, mY := m.GetPosition()
 	m.SetPosition(mX, mY)
+
+	if m.GetBatteryLevel() >= 100 {
+		blueprint := m.GetBlueprint()
+		m.SetBatteryLevel(100.0)
+		m.SetStationTargeted(false)
+		m.SetState(blueprint.States.InitialState)
+	}
+}
+
+func (m *MachineState) HandleIdleKinematics(params KinematicActionParams) {
+
+}
+
+func (m *MachineState) HandleRechargingKinematics(params KinematicActionParams) {
+
+}
+
+func (m *MachineState) HandleRescuingKinematics(params KinematicActionParams) {
+
 }
 
 type MovementParams struct {

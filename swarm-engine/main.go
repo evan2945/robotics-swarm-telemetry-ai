@@ -154,6 +154,15 @@ func createMachine(numOfMachines int, name string, specs machine.MachineBlueprin
 
 	const canvasWidth = 800.0
 	const canvasHeight = 600.0
+
+	startX := rand.Float64() * canvasWidth
+	startY := rand.Float64() * canvasHeight
+
+	if name == "SPARKER" {
+		startX = canvasWidth / 2
+		startY = canvasHeight / 2
+	}
+
 	for {
 		if numOfMachines == 0 {
 			return createdMachines
@@ -161,8 +170,8 @@ func createMachine(numOfMachines int, name string, specs machine.MachineBlueprin
 			machine := &machine.MachineState{
 				ID:                fmt.Sprintf("%s-%d", name, machineNum),
 				Name:              name,
-				X:                 rand.Float64() * canvasWidth,
-				Y:                 rand.Float64() * canvasHeight,
+				X:                 startX,
+				Y:                 startY,
 				TargetX:           rand.Float64() * canvasWidth,
 				TargetY:           rand.Float64() * canvasHeight,
 				BatteryLevel:      specs.Battery.InitialLevel,
