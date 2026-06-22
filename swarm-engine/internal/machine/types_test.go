@@ -40,6 +40,10 @@ func (m *MockEnvironment) GetVisibleMachines(machineId string, x, y, visionRange
 	return []*MachineState{}
 }
 
+func (m MockEnvironment) ConnectToMachine(machineId string) *MachineState {
+	return nil
+}
+
 func TestRunLifecycle(t *testing.T) {
 	mockMachine := &MachineState{
 		ID:             "machine-01",

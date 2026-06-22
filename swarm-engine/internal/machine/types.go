@@ -121,6 +121,7 @@ type StationData struct {
 	DiscoveredAt time.Time `json:"discovered_at"`
 	X            float64   `json:"x"`
 	Y            float64   `json:"y"`
+	ExpiresAfter float64   `json:"expires_after"`
 }
 
 type PendingPing struct {
@@ -128,6 +129,13 @@ type PendingPing struct {
 	LastKnownX    float64   `json:"last_known_x"`
 	LastKnownY    float64   `json:"last_known_y"`
 	HeardResponse bool      `json:"heard_response"`
+}
+
+type RescueData struct {
+	StationTargeted   bool    `json:"station_targeted"`
+	HasRescueTarget   bool    `json:"has_rescue_target"`
+	MachineIdToRescue string  `json:"machine_id_to_rescue"`
+	DrainFromStation  float64 `json:"drain_from_station"`
 }
 
 type MachineState struct {
@@ -150,7 +158,7 @@ type MachineState struct {
 	Env               Environment             `json:"environment"`
 	KnownStations     map[string]*StationData `json:"known_stations"`
 	PendingHeartbeats map[string]PendingPing  `json:"pending_heartbeats"`
-	StationTargeted   bool                    `json:"station_targeted"`
+	RescueInfo        RescueData              `json:"rescue_info"`
 }
 
 type WorldItem struct {
@@ -163,6 +171,7 @@ type WorldItem struct {
 type Environment interface {
 	GetVisibleItems(x, y, visionRange float64) []WorldItem
 	GetVisibleMachines(machineId string, x, y, visionRange float64) []*MachineState
+	ConnectToMachine(machineId string) *MachineState
 }
 
 func (m *MachineState) RunLifecycle(ctx context.Context) {
@@ -211,7 +220,7 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 				now := time.Now()
 				if _, ok := knownStations[item.ID]; !ok {
 					fmt.Printf("[%s] has seen world item %s!\n", m.GetName(), item.Type)
-					m.AddToKnownStations(item)
+					m.AddToKnownStations(item, StationMemoryTTL.Seconds())
 					m.Outbox <- GossipPacket{
 						ID:       fmt.Sprintf("%s:%s:%s", m.GetId(), item.ID, time.Now()),
 						OriginId: m.ID,
@@ -284,7 +293,7 @@ func (m *MachineState) RunLifecycle(ctx context.Context) {
 								Type: resource.Type,
 								X:    resource.X,
 								Y:    resource.Y,
-							})
+							}, StationMemoryTTL.Seconds())
 						}
 					}
 				case PayloadHeartbeat:
@@ -465,7 +474,8 @@ func (m *MachineState) GetKnownStations() map[string]*StationData {
 
 	// Janitor phase
 	for id, data := range m.KnownStations {
-		if time.Since(data.DiscoveredAt) > StationMemoryTTL {
+		expiresAfter := data.ExpiresAfter
+		if expiresAfter != -1 && time.Since(data.DiscoveredAt) > time.Duration(expiresAfter)*time.Second {
 			fmt.Printf("[%s] Station has expired out of memory.\n", m.Name)
 			delete(m.KnownStations, id)
 		}
@@ -474,7 +484,7 @@ func (m *MachineState) GetKnownStations() map[string]*StationData {
 	return m.KnownStations
 }
 
-func (m *MachineState) AddToKnownStations(item WorldItem) {
+func (m *MachineState) AddToKnownStations(item WorldItem, expiresAfter float64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -482,6 +492,7 @@ func (m *MachineState) AddToKnownStations(item WorldItem) {
 		DiscoveredAt: time.Now(),
 		X:            item.X,
 		Y:            item.Y,
+		ExpiresAfter: expiresAfter,
 	}
 }
 
@@ -495,18 +506,18 @@ func (m *MachineState) UpdateKnownStationsTime(id string, t time.Time) {
 	m.KnownStations[id] = station
 }
 
-func (m *MachineState) SetStationTargeted(targeted bool) {
+func (m *MachineState) GetRescueInfo() RescueData {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.StationTargeted = targeted
+	return m.RescueInfo
 }
 
-func (m *MachineState) GetStationTargeted() bool {
+func (m *MachineState) SetRescueInfo(data RescueData) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	return m.StationTargeted
+	m.RescueInfo = data
 }
 
 func (m *MachineState) GetActiveBeacons() []GossipPacket {

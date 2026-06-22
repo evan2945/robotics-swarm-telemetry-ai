@@ -39,6 +39,8 @@ type FrameTelemetry struct {
 	Items     []ItemTelemetry    `json:"items"`
 }
 
+const stationId = "station-01"
+
 func main() {
 	fmt.Println("[Hephaestus Core] Initializing Swarm Simulation Engine Skeleton...")
 
@@ -58,13 +60,13 @@ func main() {
 
 	machines := []*machine.MachineState{}
 	for name, specs := range registry {
-		machines = append(machines, createMachine(1, name, specs)...)
+		machines = append(machines, createMachine(1, name, specs, stationId)...)
 	}
 
 	engine := simulation.NewEngine(machines, 0.0)
 	engine.Items = []machine.WorldItem{
 		{
-			ID:   "station-01",
+			ID:   stationId,
 			Type: machine.ResourceStation,
 			X:    engine.Width / 2,
 			Y:    engine.Height / 2,
@@ -148,7 +150,7 @@ func main() {
 	}
 }
 
-func createMachine(numOfMachines int, name string, specs machine.MachineBlueprint) []*machine.MachineState {
+func createMachine(numOfMachines int, name string, specs machine.MachineBlueprint, stationId string) []*machine.MachineState {
 	createdMachines := []*machine.MachineState{}
 	machineNum := 1
 
@@ -158,9 +160,25 @@ func createMachine(numOfMachines int, name string, specs machine.MachineBlueprin
 	startX := rand.Float64() * canvasWidth
 	startY := rand.Float64() * canvasHeight
 
+	targetX := rand.Float64() * canvasWidth
+	targetY := rand.Float64() * canvasHeight
+
+	knownStations := make(map[string]*machine.StationData)
+
+	// Specific setup for the sparker
 	if name == "SPARKER" {
 		startX = canvasWidth / 2
 		startY = canvasHeight / 2
+
+		targetX = startX
+		targetY = startY
+
+		knownStations[stationId] = &machine.StationData{
+			DiscoveredAt: time.Now(),
+			X:            startX,
+			Y:            startY,
+			ExpiresAfter: -1,
+		}
 	}
 
 	for {
@@ -172,8 +190,8 @@ func createMachine(numOfMachines int, name string, specs machine.MachineBlueprin
 				Name:              name,
 				X:                 startX,
 				Y:                 startY,
-				TargetX:           rand.Float64() * canvasWidth,
-				TargetY:           rand.Float64() * canvasHeight,
+				TargetX:           targetX,
+				TargetY:           targetY,
 				BatteryLevel:      specs.Battery.InitialLevel,
 				TickerInterval:    time.Second,
 				Blueprint:         specs,
@@ -181,7 +199,7 @@ func createMachine(numOfMachines int, name string, specs machine.MachineBlueprin
 				Inbox:             make(chan machine.GossipPacket, 20),
 				Outbox:            make(chan machine.GossipPacket, 20),
 				SeenPackets:       make(map[string]bool),
-				KnownStations:     make(map[string]*machine.StationData),
+				KnownStations:     knownStations,
 				PendingHeartbeats: make(map[string]machine.PendingPing),
 			}
 

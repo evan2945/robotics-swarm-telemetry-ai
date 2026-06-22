@@ -19,6 +19,7 @@ WATCHER_COLOR = (0, 255, 128)
 SCRAPPER_COLOR = (238, 130, 238)
 LOW_POWER_COLOR = (255, 140, 0)
 CHARGING_COLOR = (0, 255, 255)
+DEAD_COLOR = (2550, 0, 0)
 DEFAULT_COLOR = (200, 200, 200)
 
 # Set up the display canvas
@@ -142,6 +143,8 @@ def main():
                         color = LOW_POWER_COLOR
                     elif state == "CHARGING":
                         color = CHARGING_COLOR
+                    elif state == "DEAD":
+                        color = DEAD_COLOR
                     
                     # Draw the physical machine
                     pygame.draw.circle(screen, color, (x, y), 12)
