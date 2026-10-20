@@ -16,9 +16,10 @@ A decentralized multi-agent simulation built in **Go** and visualized with **Pyg
 
 The system models agents operating within a shared coordinate environment communicating purely through gossip network packets:
 
-* **Patrol & Low Power**: Units autonomously wander or locate charging stations based on proximity caches.
-* **Heartbeats & SOS**: Peers send heartbeat requests to visible units. Unresponsive or dead units trigger an `SOS` packet broadcast across the mesh.
-* **Emergency Rescue**: Sparker units receive `SOS` broadcasts, pause patrol routes, navigate to the target, and jump-start dead agent batteries.
+* **Patrol & Station Discovery**: Units wander autonomously while tracking low battery levels. When a unit discovers a charging station, it broadcasts resource gossip packets across the mesh so peer agents update their station memory caches without needing direct line-of-sight.
+* **Low Power & Navigation**: Machines in low-power states query their station caches to target and navigate to the nearest known charging station.
+* **Heartbeats & SOS**: Active peers issue ping/pong heartbeats to visible units. If a peer goes unresponsive or dies, a reporting unit broadcasts an `SOS` packet multi-hop across the mesh.
+* **Emergency Rescue**: Sparker units parse `SOS` broadcasts, pause their current tasks, navigate to the reported distress coordinates, and jump-start dead agent batteries back into active lifecycles.
 
 ---
 
